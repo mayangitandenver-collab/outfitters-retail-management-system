@@ -1,0 +1,113 @@
+name: Build and Test
+
+on:
+
+  push:
+
+    branches:
+
+      - main
+
+      - develop
+
+  pull_request:
+
+    branches:
+
+      - main
+
+  workflow_dispatch:
+
+permissions:
+
+  contents: read
+
+jobs:
+
+  build-and-test:
+
+    runs-on: windows-latest
+
+    steps:
+
+      - name: Check out repository
+
+        uses: actions/checkout@v4
+
+      - name: Install .NET SDK
+
+        uses: actions/setup-dotnet@v4
+
+        with:
+
+          dotnet-version: "9.0.x"
+
+      - name: Display .NET information
+
+        run: dotnet --info
+
+      - name: Restore dependencies
+
+        run: dotnet restore OutfittersRetailManagementSystem.sln
+
+      - name: Build solution
+
+        run: >
+
+          dotnet build OutfittersRetailManagementSystem.sln
+
+          --configuration Release
+
+          --no-restore
+
+      - name: Run tests
+
+        run: >
+
+          dotnet test OutfittersRetailManagementSystem.sln
+
+          --configuration Release
+
+          --no-build
+
+          --logger "trx;LogFileName=test-results.trx"
+
+          --results-directory TestResults
+
+      - name: Publish API
+
+        run: >
+
+          dotnet publish src/Outfitters.API/Outfitters.API.csproj
+
+          --configuration Release
+
+          --no-build
+
+          --output publish/api
+
+      - name: Upload published API
+
+        uses: actions/upload-artifact@v4
+
+        with:
+
+          name: outfitters-api
+
+          path: publish/api
+
+          if-no-files-found: error
+
+      - name: Upload test results
+
+        if: always()
+
+        uses: actions/upload-artifact@v4
+
+        with:
+
+          name: test-results
+
+          path: TestResults
+
+          if-no-files-found: warn
