@@ -244,52 +244,33 @@ jobs:
               sale_path.write_text(sale_text)
           PY
 
-      - name: Replace database context with CRM model
+      - name: Extend database context with CRM model
         shell: bash
         run: |
           set -euo pipefail
 
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path("src/Outfitters.Infrastructure/Persistence/ApplicationDbContext.cs")
           text = path.read_text()
 
-          dbset_anchor = "              public DbSet<StockTransferReceiptItem> StockTransferReceiptItems => Set<StockTransferReceiptItem>();\n"
-          dbset_insert = dbset_anchor + """              public DbSet<CustomerTier> CustomerTiers => Set<CustomerTier>();
+          dbsets = """              public DbSet<CustomerTier> CustomerTiers => Set<CustomerTier>();
               public DbSet<Customer> Customers => Set<Customer>();
               public DbSet<LoyaltyTransaction> LoyaltyTransactions => Set<LoyaltyTransaction>();
               public DbSet<CustomerVoucher> CustomerVouchers => Set<CustomerVoucher>();
               public DbSet<CustomerFavoriteProduct> CustomerFavoriteProducts => Set<CustomerFavoriteProduct>();
-          """
-          if dbset_anchor not in text:
-              raise SystemExit("CRM DbSet anchor not found")
-          text = text.replace(dbset_anchor, dbset_insert, 1)
 
-          sale_anchor = """                      entity.HasOne(x => x.CashierUser).WithMany()
-                          .HasForeignKey(x => x.CashierUserId).OnDelete(DeleteBehavior.Restrict);
-          """
-          sale_insert = sale_anchor + """                      entity.HasOne(x => x.Customer).WithMany()
-                          .HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.SetNull);
-          """
-          if "HasForeignKey(x => x.CustomerId)" not in text:
-              if sale_anchor not in text:
-                  raise SystemExit("Sale relationship anchor not found")
-              text = text.replace(sale_anchor, sale_insert, 1)
+"""
 
-          config_anchor = """                  builder.Entity<StockTransferReceiptItem>(entity =>
-                  {
-                      entity.Property(x => x.QuantityReceived).HasPrecision(18, 3);
-                      entity.Property(x => x.QuantityDamaged).HasPrecision(18, 3);
-                      entity.HasOne(x => x.StockTransferReceipt).WithMany(x => x.Items)
-                          .HasForeignKey(x => x.StockTransferReceiptId).OnDelete(DeleteBehavior.Cascade);
-                      entity.HasOne(x => x.StockTransferItem).WithMany()
-                          .HasForeignKey(x => x.StockTransferItemId).OnDelete(DeleteBehavior.Restrict);
-                      entity.HasOne(x => x.ProductVariant).WithMany()
-                          .HasForeignKey(x => x.ProductVariantId).OnDelete(DeleteBehavior.Restrict);
-                  });
-          """
-          crm_config = config_anchor + """
+          if "DbSet<CustomerTier>" not in text:
+              method_index = text.find("protected override void OnModelCreating")
+              if method_index == -1:
+                  raise SystemExit("OnModelCreating method not found")
+              text = text[:method_index] + dbsets + text[method_index:]
+
+          crm_config = """
                   builder.Entity<CustomerTier>(entity =>
                   {
                       entity.HasIndex(x => x.Name).IsUnique();
@@ -347,10 +328,41 @@ jobs:
                       entity.HasOne(x => x.Product).WithMany()
                           .HasForeignKey(x => x.ProductId).OnDelete(DeleteBehavior.Cascade);
                   });
-          """
-          if config_anchor not in text:
-              raise SystemExit("CRM model configuration anchor not found")
-          text = text.replace(config_anchor, crm_config, 1)
+
+                  builder.Entity<Sale>(entity =>
+                  {
+                      entity.HasOne(x => x.Customer).WithMany()
+                          .HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.SetNull);
+                  });
+"""
+
+          if "builder.Entity<CustomerTier>" not in text:
+              method_match = re.search(
+                  r"protected\s+override\s+void\s+OnModelCreating\s*\([^)]*\)\s*\{",
+                  text
+              )
+              if not method_match:
+                  raise SystemExit("OnModelCreating opening brace not found")
+
+              opening_brace = text.find("{", method_match.start())
+              depth = 0
+              closing_brace = None
+
+              for index in range(opening_brace, len(text)):
+                  character = text[index]
+                  if character == "{":
+                      depth += 1
+                  elif character == "}":
+                      depth -= 1
+                      if depth == 0:
+                          closing_brace = index
+                          break
+
+              if closing_brace is None:
+                  raise SystemExit("OnModelCreating closing brace not found")
+
+              text = text[:closing_brace] + crm_config + text[closing_brace:]
+
           path.write_text(text)
           PY
 
