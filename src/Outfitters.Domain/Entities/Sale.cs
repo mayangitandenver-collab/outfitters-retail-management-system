@@ -22,4 +22,7 @@ public sealed class Sale : BaseEntity
     public string? Notes { get; set; }
     public ICollection<SaleItem> Items { get; set; } = new List<SaleItem>();
     public ICollection<SalePayment> Payments { get; set; } = new List<SalePayment>();
+
+    public Guid? CustomerId { get; set; }
+    public Customer? Customer { get; set; }
 }
