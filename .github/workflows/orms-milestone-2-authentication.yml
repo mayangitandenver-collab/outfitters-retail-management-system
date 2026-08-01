@@ -26,6 +26,7 @@ jobs:
 
           dotnet add src/Outfitters.API/Outfitters.API.csproj package Microsoft.AspNetCore.Authentication.JwtBearer --version 9.0.*
           dotnet add src/Outfitters.API/Outfitters.API.csproj package Microsoft.AspNetCore.Identity.EntityFrameworkCore --version 9.0.*
+          dotnet add src/Outfitters.API/Outfitters.API.csproj package Microsoft.EntityFrameworkCore.Design --version 9.0.*
           dotnet add src/Outfitters.Domain/Outfitters.Domain.csproj package Microsoft.Extensions.Identity.Stores --version 9.0.*
           dotnet add src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj package Microsoft.EntityFrameworkCore --version 9.0.*
           dotnet add src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj package Microsoft.EntityFrameworkCore.Design --version 9.0.*
