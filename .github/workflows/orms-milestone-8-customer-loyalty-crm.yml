@@ -1,0 +1,885 @@
+name: ORMS Milestone 8 - Customer Loyalty and CRM
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  milestone8:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Write CRM domain model
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p src/Outfitters.Domain/Entities
+          mkdir -p src/Outfitters.Domain/Enums
+          mkdir -p src/Outfitters.Application/Customers
+          mkdir -p src/Outfitters.API/Controllers
+
+          cat > src/Outfitters.Domain/Enums/LoyaltyTransactionType.cs <<'EOF'
+          namespace Outfitters.Domain.Enums;
+
+          public enum LoyaltyTransactionType
+          {
+              Earn = 1,
+              Redeem = 2,
+              Adjustment = 3,
+              Expiration = 4,
+              Reversal = 5
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Enums/VoucherStatus.cs <<'EOF'
+          namespace Outfitters.Domain.Enums;
+
+          public enum VoucherStatus
+          {
+              Active = 1,
+              Redeemed = 2,
+              Expired = 3,
+              Cancelled = 4
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/CustomerTier.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class CustomerTier : BaseEntity
+          {
+              public string Name { get; set; } = string.Empty;
+              public decimal MinimumLifetimeSpend { get; set; }
+              public decimal PointsMultiplier { get; set; } = 1m;
+              public decimal DefaultDiscountPercent { get; set; }
+              public bool IsActive { get; set; } = true;
+              public ICollection<Customer> Customers { get; set; } = new List<Customer>();
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/Customer.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class Customer : BaseEntity
+          {
+              public string CustomerNumber { get; set; } = string.Empty;
+              public string FirstName { get; set; } = string.Empty;
+              public string LastName { get; set; } = string.Empty;
+              public string? Email { get; set; }
+              public string? Phone { get; set; }
+              public DateOnly? BirthDate { get; set; }
+              public string? Address { get; set; }
+              public Guid? CustomerTierId { get; set; }
+              public CustomerTier? CustomerTier { get; set; }
+              public decimal LoyaltyPointsBalance { get; set; }
+              public decimal StoreCreditBalance { get; set; }
+              public decimal LifetimeSpend { get; set; }
+              public DateTime? LastPurchaseAtUtc { get; set; }
+              public bool AcceptsEmailMarketing { get; set; }
+              public bool AcceptsSmsMarketing { get; set; }
+              public bool IsActive { get; set; } = true;
+              public ICollection<LoyaltyTransaction> LoyaltyTransactions { get; set; } =
+                  new List<LoyaltyTransaction>();
+              public ICollection<CustomerVoucher> Vouchers { get; set; } =
+                  new List<CustomerVoucher>();
+              public ICollection<CustomerFavoriteProduct> FavoriteProducts { get; set; } =
+                  new List<CustomerFavoriteProduct>();
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/LoyaltyTransaction.cs <<'EOF'
+          using Outfitters.Domain.Common;
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class LoyaltyTransaction : BaseEntity
+          {
+              public Guid CustomerId { get; set; }
+              public Customer Customer { get; set; } = null!;
+              public LoyaltyTransactionType Type { get; set; }
+              public decimal PointsChange { get; set; }
+              public decimal BalanceAfter { get; set; }
+              public Guid? SaleId { get; set; }
+              public Sale? Sale { get; set; }
+              public string? ReferenceNumber { get; set; }
+              public string? Notes { get; set; }
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/CustomerVoucher.cs <<'EOF'
+          using Outfitters.Domain.Common;
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class CustomerVoucher : BaseEntity
+          {
+              public Guid CustomerId { get; set; }
+              public Customer Customer { get; set; } = null!;
+              public string Code { get; set; } = string.Empty;
+              public decimal DiscountAmount { get; set; }
+              public decimal DiscountPercent { get; set; }
+              public decimal MinimumSpend { get; set; }
+              public DateTime ValidFromUtc { get; set; } = DateTime.UtcNow;
+              public DateTime ValidUntilUtc { get; set; }
+              public VoucherStatus Status { get; set; } = VoucherStatus.Active;
+              public DateTime? RedeemedAtUtc { get; set; }
+              public Guid? RedeemedSaleId { get; set; }
+              public Sale? RedeemedSale { get; set; }
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/CustomerFavoriteProduct.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class CustomerFavoriteProduct : BaseEntity
+          {
+              public Guid CustomerId { get; set; }
+              public Customer Customer { get; set; } = null!;
+              public Guid ProductId { get; set; }
+              public Product Product { get; set; } = null!;
+          }
+          EOF
+
+      - name: Write CRM contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Application/Customers/CustomerContracts.cs <<'EOF'
+          namespace Outfitters.Application.Customers;
+
+          public sealed record CreateCustomerRequest(
+              string FirstName,
+              string LastName,
+              string? Email,
+              string? Phone,
+              DateOnly? BirthDate,
+              string? Address,
+              bool AcceptsEmailMarketing,
+              bool AcceptsSmsMarketing);
+
+          public sealed record UpdateCustomerRequest(
+              string FirstName,
+              string LastName,
+              string? Email,
+              string? Phone,
+              DateOnly? BirthDate,
+              string? Address,
+              Guid? CustomerTierId,
+              bool AcceptsEmailMarketing,
+              bool AcceptsSmsMarketing,
+              bool IsActive);
+
+          public sealed record AdjustLoyaltyPointsRequest(
+              decimal PointsChange,
+              string? Notes);
+
+          public sealed record AdjustStoreCreditRequest(
+              decimal AmountChange,
+              string? Notes);
+
+          public sealed record CreateVoucherRequest(
+              decimal DiscountAmount,
+              decimal DiscountPercent,
+              decimal MinimumSpend,
+              DateTime ValidUntilUtc);
+
+          public sealed record AddFavoriteProductRequest(
+              Guid ProductId);
+          EOF
+
+      - name: Extend sales for customer linkage
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          sale_path = Path("src/Outfitters.Domain/Entities/Sale.cs")
+          sale_text = sale_path.read_text()
+
+          anchor = "              public Guid CashierUserId { get; set; }\n"
+          insert = """              public Guid? CustomerId { get; set; }
+              public Customer? Customer { get; set; }
+"""
+          if "public Guid? CustomerId" not in sale_text:
+              if anchor not in sale_text:
+                  raise SystemExit("Sale customer anchor not found")
+              sale_text = sale_text.replace(anchor, insert + anchor, 1)
+              sale_path.write_text(sale_text)
+          PY
+
+      - name: Replace database context with CRM model
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/Outfitters.Infrastructure/Persistence/ApplicationDbContext.cs")
+          text = path.read_text()
+
+          dbset_anchor = "              public DbSet<StockTransferReceiptItem> StockTransferReceiptItems => Set<StockTransferReceiptItem>();\n"
+          dbset_insert = dbset_anchor + """              public DbSet<CustomerTier> CustomerTiers => Set<CustomerTier>();
+              public DbSet<Customer> Customers => Set<Customer>();
+              public DbSet<LoyaltyTransaction> LoyaltyTransactions => Set<LoyaltyTransaction>();
+              public DbSet<CustomerVoucher> CustomerVouchers => Set<CustomerVoucher>();
+              public DbSet<CustomerFavoriteProduct> CustomerFavoriteProducts => Set<CustomerFavoriteProduct>();
+"""
+          if dbset_anchor not in text:
+              raise SystemExit("CRM DbSet anchor not found")
+          text = text.replace(dbset_anchor, dbset_insert, 1)
+
+          sale_anchor = """                      entity.HasOne(x => x.CashierUser).WithMany()
+                          .HasForeignKey(x => x.CashierUserId).OnDelete(DeleteBehavior.Restrict);
+"""
+          sale_insert = sale_anchor + """                      entity.HasOne(x => x.Customer).WithMany()
+                          .HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.SetNull);
+"""
+          if "HasForeignKey(x => x.CustomerId)" not in text:
+              if sale_anchor not in text:
+                  raise SystemExit("Sale relationship anchor not found")
+              text = text.replace(sale_anchor, sale_insert, 1)
+
+          config_anchor = """                  builder.Entity<StockTransferReceiptItem>(entity =>
+                  {
+                      entity.Property(x => x.QuantityReceived).HasPrecision(18, 3);
+                      entity.Property(x => x.QuantityDamaged).HasPrecision(18, 3);
+                      entity.HasOne(x => x.StockTransferReceipt).WithMany(x => x.Items)
+                          .HasForeignKey(x => x.StockTransferReceiptId).OnDelete(DeleteBehavior.Cascade);
+                      entity.HasOne(x => x.StockTransferItem).WithMany()
+                          .HasForeignKey(x => x.StockTransferItemId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.ProductVariant).WithMany()
+                          .HasForeignKey(x => x.ProductVariantId).OnDelete(DeleteBehavior.Restrict);
+                  });
+"""
+          crm_config = config_anchor + """
+                  builder.Entity<CustomerTier>(entity =>
+                  {
+                      entity.HasIndex(x => x.Name).IsUnique();
+                      entity.Property(x => x.Name).HasMaxLength(100).IsRequired();
+                      entity.Property(x => x.MinimumLifetimeSpend).HasPrecision(18, 2);
+                      entity.Property(x => x.PointsMultiplier).HasPrecision(18, 2);
+                      entity.Property(x => x.DefaultDiscountPercent).HasPrecision(5, 2);
+                  });
+
+                  builder.Entity<Customer>(entity =>
+                  {
+                      entity.HasIndex(x => x.CustomerNumber).IsUnique();
+                      entity.HasIndex(x => x.Email);
+                      entity.HasIndex(x => x.Phone);
+                      entity.Property(x => x.CustomerNumber).HasMaxLength(50).IsRequired();
+                      entity.Property(x => x.FirstName).HasMaxLength(100).IsRequired();
+                      entity.Property(x => x.LastName).HasMaxLength(100).IsRequired();
+                      entity.Property(x => x.Email).HasMaxLength(250);
+                      entity.Property(x => x.Phone).HasMaxLength(50);
+                      entity.Property(x => x.LoyaltyPointsBalance).HasPrecision(18, 2);
+                      entity.Property(x => x.StoreCreditBalance).HasPrecision(18, 2);
+                      entity.Property(x => x.LifetimeSpend).HasPrecision(18, 2);
+                      entity.HasOne(x => x.CustomerTier).WithMany(x => x.Customers)
+                          .HasForeignKey(x => x.CustomerTierId).OnDelete(DeleteBehavior.SetNull);
+                  });
+
+                  builder.Entity<LoyaltyTransaction>(entity =>
+                  {
+                      entity.Property(x => x.PointsChange).HasPrecision(18, 2);
+                      entity.Property(x => x.BalanceAfter).HasPrecision(18, 2);
+                      entity.HasOne(x => x.Customer).WithMany(x => x.LoyaltyTransactions)
+                          .HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Cascade);
+                      entity.HasOne(x => x.Sale).WithMany()
+                          .HasForeignKey(x => x.SaleId).OnDelete(DeleteBehavior.SetNull);
+                  });
+
+                  builder.Entity<CustomerVoucher>(entity =>
+                  {
+                      entity.HasIndex(x => x.Code).IsUnique();
+                      entity.Property(x => x.Code).HasMaxLength(80).IsRequired();
+                      entity.Property(x => x.DiscountAmount).HasPrecision(18, 2);
+                      entity.Property(x => x.DiscountPercent).HasPrecision(5, 2);
+                      entity.Property(x => x.MinimumSpend).HasPrecision(18, 2);
+                      entity.HasOne(x => x.Customer).WithMany(x => x.Vouchers)
+                          .HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Cascade);
+                      entity.HasOne(x => x.RedeemedSale).WithMany()
+                          .HasForeignKey(x => x.RedeemedSaleId).OnDelete(DeleteBehavior.SetNull);
+                  });
+
+                  builder.Entity<CustomerFavoriteProduct>(entity =>
+                  {
+                      entity.HasIndex(x => new { x.CustomerId, x.ProductId }).IsUnique();
+                      entity.HasOne(x => x.Customer).WithMany(x => x.FavoriteProducts)
+                          .HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Cascade);
+                      entity.HasOne(x => x.Product).WithMany()
+                          .HasForeignKey(x => x.ProductId).OnDelete(DeleteBehavior.Cascade);
+                  });
+"""
+          if config_anchor not in text:
+              raise SystemExit("CRM model configuration anchor not found")
+          text = text.replace(config_anchor, crm_config, 1)
+          path.write_text(text)
+          PY
+
+      - name: Write customer controller
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.API/Controllers/CustomersController.cs <<'EOF'
+          using System.Globalization;
+          using Microsoft.AspNetCore.Authorization;
+          using Microsoft.AspNetCore.Mvc;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Application.Customers;
+          using Outfitters.Domain.Entities;
+          using Outfitters.Domain.Enums;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.API.Controllers;
+
+          [ApiController]
+          [Authorize]
+          [Route("api/customers")]
+          public sealed class CustomersController : ControllerBase
+          {
+              private readonly ApplicationDbContext _db;
+
+              public CustomersController(ApplicationDbContext db) => _db = db;
+
+              [HttpGet]
+              public async Task<IActionResult> Search(
+                  [FromQuery] string? search,
+                  [FromQuery] int limit = 50)
+              {
+                  limit = Math.Clamp(limit, 1, 200);
+                  var query = _db.Customers
+                      .AsNoTracking()
+                      .Include(x => x.CustomerTier)
+                      .AsQueryable();
+
+                  if (!string.IsNullOrWhiteSpace(search))
+                  {
+                      var term = search.Trim().ToLower();
+                      query = query.Where(x =>
+                          x.CustomerNumber.ToLower().Contains(term) ||
+                          x.FirstName.ToLower().Contains(term) ||
+                          x.LastName.ToLower().Contains(term) ||
+                          (x.Email != null && x.Email.ToLower().Contains(term)) ||
+                          (x.Phone != null && x.Phone.Contains(term)));
+                  }
+
+                  var result = await query
+                      .OrderBy(x => x.LastName)
+                      .ThenBy(x => x.FirstName)
+                      .Take(limit)
+                      .Select(x => new
+                      {
+                          x.Id,
+                          x.CustomerNumber,
+                          x.FirstName,
+                          x.LastName,
+                          x.Email,
+                          x.Phone,
+                          Tier = x.CustomerTier == null ? null : x.CustomerTier.Name,
+                          x.LoyaltyPointsBalance,
+                          x.StoreCreditBalance,
+                          x.LifetimeSpend,
+                          x.LastPurchaseAtUtc,
+                          x.IsActive
+                      })
+                      .ToListAsync();
+
+                  return Ok(result);
+              }
+
+              [HttpGet("{id:guid}")]
+              public async Task<IActionResult> Get(Guid id)
+              {
+                  var customer = await _db.Customers
+                      .AsNoTracking()
+                      .Where(x => x.Id == id)
+                      .Select(x => new
+                      {
+                          x.Id,
+                          x.CustomerNumber,
+                          x.FirstName,
+                          x.LastName,
+                          x.Email,
+                          x.Phone,
+                          x.BirthDate,
+                          x.Address,
+                          x.CustomerTierId,
+                          Tier = x.CustomerTier == null ? null : x.CustomerTier.Name,
+                          x.LoyaltyPointsBalance,
+                          x.StoreCreditBalance,
+                          x.LifetimeSpend,
+                          x.LastPurchaseAtUtc,
+                          x.AcceptsEmailMarketing,
+                          x.AcceptsSmsMarketing,
+                          x.IsActive
+                      })
+                      .SingleOrDefaultAsync();
+
+                  return customer is null ? NotFound() : Ok(customer);
+              }
+
+              [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager,Cashier")]
+              [HttpPost]
+              public async Task<IActionResult> Create(CreateCustomerRequest request)
+              {
+                  if (string.IsNullOrWhiteSpace(request.FirstName) ||
+                      string.IsNullOrWhiteSpace(request.LastName))
+                  {
+                      return BadRequest("First and last name are required.");
+                  }
+
+                  var customer = new Customer
+                  {
+                      CustomerNumber = await GenerateCustomerNumber(),
+                      FirstName = request.FirstName.Trim(),
+                      LastName = request.LastName.Trim(),
+                      Email = request.Email?.Trim(),
+                      Phone = request.Phone?.Trim(),
+                      BirthDate = request.BirthDate,
+                      Address = request.Address?.Trim(),
+                      AcceptsEmailMarketing = request.AcceptsEmailMarketing,
+                      AcceptsSmsMarketing = request.AcceptsSmsMarketing
+                  };
+
+                  _db.Customers.Add(customer);
+                  await _db.SaveChangesAsync();
+
+                  return Ok(new
+                  {
+                      customer.Id,
+                      customer.CustomerNumber
+                  });
+              }
+
+              [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager")]
+              [HttpPut("{id:guid}")]
+              public async Task<IActionResult> Update(Guid id, UpdateCustomerRequest request)
+              {
+                  var customer = await _db.Customers.SingleOrDefaultAsync(x => x.Id == id);
+                  if (customer is null)
+                  {
+                      return NotFound();
+                  }
+
+                  customer.FirstName = request.FirstName.Trim();
+                  customer.LastName = request.LastName.Trim();
+                  customer.Email = request.Email?.Trim();
+                  customer.Phone = request.Phone?.Trim();
+                  customer.BirthDate = request.BirthDate;
+                  customer.Address = request.Address?.Trim();
+                  customer.CustomerTierId = request.CustomerTierId;
+                  customer.AcceptsEmailMarketing = request.AcceptsEmailMarketing;
+                  customer.AcceptsSmsMarketing = request.AcceptsSmsMarketing;
+                  customer.IsActive = request.IsActive;
+                  customer.UpdatedAtUtc = DateTime.UtcNow;
+
+                  await _db.SaveChangesAsync();
+                  return NoContent();
+              }
+
+              [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager")]
+              [HttpPost("{id:guid}/loyalty/adjust")]
+              public async Task<IActionResult> AdjustLoyalty(
+                  Guid id,
+                  AdjustLoyaltyPointsRequest request)
+              {
+                  var customer = await _db.Customers.SingleOrDefaultAsync(x => x.Id == id);
+                  if (customer is null)
+                  {
+                      return NotFound();
+                  }
+
+                  var newBalance = customer.LoyaltyPointsBalance + request.PointsChange;
+                  if (newBalance < 0)
+                  {
+                      return BadRequest("Loyalty balance cannot be negative.");
+                  }
+
+                  customer.LoyaltyPointsBalance = newBalance;
+                  customer.UpdatedAtUtc = DateTime.UtcNow;
+
+                  _db.LoyaltyTransactions.Add(new LoyaltyTransaction
+                  {
+                      CustomerId = customer.Id,
+                      Type = LoyaltyTransactionType.Adjustment,
+                      PointsChange = request.PointsChange,
+                      BalanceAfter = newBalance,
+                      ReferenceNumber = $"ADJ-{DateTime.UtcNow:yyyyMMddHHmmss}",
+                      Notes = request.Notes?.Trim()
+                  });
+
+                  await _db.SaveChangesAsync();
+
+                  return Ok(new
+                  {
+                      customer.Id,
+                      customer.LoyaltyPointsBalance
+                  });
+              }
+
+              [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager")]
+              [HttpPost("{id:guid}/store-credit/adjust")]
+              public async Task<IActionResult> AdjustStoreCredit(
+                  Guid id,
+                  AdjustStoreCreditRequest request)
+              {
+                  var customer = await _db.Customers.SingleOrDefaultAsync(x => x.Id == id);
+                  if (customer is null)
+                  {
+                      return NotFound();
+                  }
+
+                  var newBalance = customer.StoreCreditBalance + request.AmountChange;
+                  if (newBalance < 0)
+                  {
+                      return BadRequest("Store-credit balance cannot be negative.");
+                  }
+
+                  customer.StoreCreditBalance = newBalance;
+                  customer.UpdatedAtUtc = DateTime.UtcNow;
+                  await _db.SaveChangesAsync();
+
+                  return Ok(new
+                  {
+                      customer.Id,
+                      customer.StoreCreditBalance,
+                      request.Notes
+                  });
+              }
+
+              [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager")]
+              [HttpPost("{id:guid}/vouchers")]
+              public async Task<IActionResult> CreateVoucher(
+                  Guid id,
+                  CreateVoucherRequest request)
+              {
+                  if (!await _db.Customers.AnyAsync(x => x.Id == id))
+                  {
+                      return NotFound();
+                  }
+
+                  if (request.DiscountAmount < 0 ||
+                      request.DiscountPercent < 0 ||
+                      request.MinimumSpend < 0 ||
+                      request.ValidUntilUtc <= DateTime.UtcNow)
+                  {
+                      return BadRequest("Voucher values are invalid.");
+                  }
+
+                  var voucher = new CustomerVoucher
+                  {
+                      CustomerId = id,
+                      Code = $"VCH-{Guid.NewGuid():N}"[..20].ToUpperInvariant(),
+                      DiscountAmount = request.DiscountAmount,
+                      DiscountPercent = request.DiscountPercent,
+                      MinimumSpend = request.MinimumSpend,
+                      ValidUntilUtc = request.ValidUntilUtc
+                  };
+
+                  _db.CustomerVouchers.Add(voucher);
+                  await _db.SaveChangesAsync();
+
+                  return Ok(new
+                  {
+                      voucher.Id,
+                      voucher.Code,
+                      voucher.ValidUntilUtc,
+                      voucher.Status
+                  });
+              }
+
+              [HttpGet("{id:guid}/purchase-history")]
+              public async Task<IActionResult> PurchaseHistory(Guid id)
+              {
+                  if (!await _db.Customers.AnyAsync(x => x.Id == id))
+                  {
+                      return NotFound();
+                  }
+
+                  var result = await _db.Sales
+                      .AsNoTracking()
+                      .Where(x => x.CustomerId == id)
+                      .OrderByDescending(x => x.CreatedAtUtc)
+                      .Select(x => new
+                      {
+                          x.Id,
+                          x.ReceiptNumber,
+                          x.StoreId,
+                          x.GrandTotal,
+                          x.Status,
+                          x.CreatedAtUtc,
+                          Items = x.Items.Select(i => new
+                          {
+                              i.ProductVariantId,
+                              ProductName = i.ProductVariant.Product.Name,
+                              i.Quantity,
+                              i.UnitPrice,
+                              i.LineTotal
+                          })
+                      })
+                      .ToListAsync();
+
+                  return Ok(result);
+              }
+
+              [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager,Cashier")]
+              [HttpPost("{id:guid}/favorites")]
+              public async Task<IActionResult> AddFavorite(
+                  Guid id,
+                  AddFavoriteProductRequest request)
+              {
+                  if (!await _db.Customers.AnyAsync(x => x.Id == id) ||
+                      !await _db.Products.AnyAsync(x => x.Id == request.ProductId))
+                  {
+                      return NotFound();
+                  }
+
+                  if (await _db.CustomerFavoriteProducts.AnyAsync(x =>
+                      x.CustomerId == id && x.ProductId == request.ProductId))
+                  {
+                      return Conflict("Product is already a favorite.");
+                  }
+
+                  _db.CustomerFavoriteProducts.Add(new CustomerFavoriteProduct
+                  {
+                      CustomerId = id,
+                      ProductId = request.ProductId
+                  });
+
+                  await _db.SaveChangesAsync();
+                  return NoContent();
+              }
+
+              private async Task<string> GenerateCustomerNumber()
+              {
+                  var datePart = DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+                  var count = await _db.Customers.CountAsync(x =>
+                      x.CreatedAtUtc.Date == DateTime.UtcNow.Date);
+                  return $"CUS-{datePart}-{count + 1:00000}";
+              }
+          }
+          EOF
+
+      - name: Write CRM reporting controller
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.API/Controllers/CustomerReportsController.cs <<'EOF'
+          using Microsoft.AspNetCore.Authorization;
+          using Microsoft.AspNetCore.Mvc;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Domain.Enums;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.API.Controllers;
+
+          [ApiController]
+          [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager")]
+          [Route("api/customer-reports")]
+          public sealed class CustomerReportsController : ControllerBase
+          {
+              private readonly ApplicationDbContext _db;
+
+              public CustomerReportsController(ApplicationDbContext db) => _db = db;
+
+              [HttpGet("top-customers")]
+              public async Task<IActionResult> TopCustomers([FromQuery] int limit = 25)
+              {
+                  limit = Math.Clamp(limit, 1, 100);
+
+                  var result = await _db.Customers
+                      .AsNoTracking()
+                      .OrderByDescending(x => x.LifetimeSpend)
+                      .Take(limit)
+                      .Select(x => new
+                      {
+                          x.Id,
+                          x.CustomerNumber,
+                          CustomerName = x.FirstName + " " + x.LastName,
+                          Tier = x.CustomerTier == null ? null : x.CustomerTier.Name,
+                          x.LifetimeSpend,
+                          x.LoyaltyPointsBalance,
+                          x.StoreCreditBalance,
+                          x.LastPurchaseAtUtc,
+                          TransactionCount = _db.Sales.Count(s =>
+                              s.CustomerId == x.Id &&
+                              s.Status != SaleStatus.Voided)
+                      })
+                      .ToListAsync();
+
+                  return Ok(result);
+              }
+
+              [HttpGet("segments")]
+              public async Task<IActionResult> Segments()
+              {
+                  var now = DateTime.UtcNow;
+
+                  var result = new
+                  {
+                      NewCustomers = await _db.Customers.CountAsync(x =>
+                          x.CreatedAtUtc >= now.AddDays(-30)),
+                      ActiveCustomers = await _db.Customers.CountAsync(x =>
+                          x.LastPurchaseAtUtc >= now.AddDays(-90)),
+                      AtRiskCustomers = await _db.Customers.CountAsync(x =>
+                          x.LastPurchaseAtUtc < now.AddDays(-90) &&
+                          x.LastPurchaseAtUtc >= now.AddDays(-180)),
+                      DormantCustomers = await _db.Customers.CountAsync(x =>
+                          x.LastPurchaseAtUtc < now.AddDays(-180)),
+                      BirthdayCustomersThisMonth = await _db.Customers.CountAsync(x =>
+                          x.BirthDate.HasValue &&
+                          x.BirthDate.Value.Month == now.Month),
+                      EmailSubscribers = await _db.Customers.CountAsync(x =>
+                          x.AcceptsEmailMarketing),
+                      SmsSubscribers = await _db.Customers.CountAsync(x =>
+                          x.AcceptsSmsMarketing)
+                  };
+
+                  return Ok(result);
+              }
+
+              [HttpGet("lifetime-value")]
+              public async Task<IActionResult> LifetimeValue([FromQuery] int limit = 100)
+              {
+                  limit = Math.Clamp(limit, 1, 500);
+
+                  var result = await _db.Customers
+                      .AsNoTracking()
+                      .OrderByDescending(x => x.LifetimeSpend)
+                      .Take(limit)
+                      .Select(x => new
+                      {
+                          x.Id,
+                          x.CustomerNumber,
+                          CustomerName = x.FirstName + " " + x.LastName,
+                          x.LifetimeSpend,
+                          Purchases = _db.Sales.Count(s =>
+                              s.CustomerId == x.Id &&
+                              s.Status != SaleStatus.Voided),
+                          AverageOrderValue = _db.Sales
+                              .Where(s =>
+                                  s.CustomerId == x.Id &&
+                                  s.Status != SaleStatus.Voided)
+                              .Average(s => (decimal?)s.GrandTotal) ?? 0m,
+                          FirstPurchaseAtUtc = _db.Sales
+                              .Where(s =>
+                                  s.CustomerId == x.Id &&
+                                  s.Status != SaleStatus.Voided)
+                              .Min(s => (DateTime?)s.CreatedAtUtc),
+                          x.LastPurchaseAtUtc
+                      })
+                      .ToListAsync();
+
+                  return Ok(result);
+              }
+          }
+          EOF
+
+      - name: Seed default customer tiers
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/Outfitters.Infrastructure/Persistence/DatabaseSeeder.cs")
+          text = path.read_text()
+
+          marker = "          }\n      }\n"
+          seed_block = """
+              if (!await db.CustomerTiers.AnyAsync())
+              {
+                  db.CustomerTiers.AddRange(
+                      new CustomerTier
+                      {
+                          Name = "Silver",
+                          MinimumLifetimeSpend = 0m,
+                          PointsMultiplier = 1m,
+                          DefaultDiscountPercent = 0m
+                      },
+                      new CustomerTier
+                      {
+                          Name = "Gold",
+                          MinimumLifetimeSpend = 25000m,
+                          PointsMultiplier = 1.25m,
+                          DefaultDiscountPercent = 3m
+                      },
+                      new CustomerTier
+                      {
+                          Name = "Platinum",
+                          MinimumLifetimeSpend = 75000m,
+                          PointsMultiplier = 1.5m,
+                          DefaultDiscountPercent = 5m
+                      });
+
+                  await db.SaveChangesAsync();
+              }
+"""
+          if "Name = \"Silver\"" not in text:
+              index = text.rfind(marker)
+              if index == -1:
+                  raise SystemExit("Seeder insertion point not found")
+              text = text[:index] + seed_block + text[index:]
+              path.write_text(text)
+          PY
+
+      - name: Compile before migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore OutfittersRetailManagementSystem.sln
+          dotnet build OutfittersRetailManagementSystem.sln --configuration Release --no-restore
+
+      - name: Create EF Core migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet tool install --global dotnet-ef --version 9.0.*
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          dotnet ef migrations add AddCustomerLoyaltyAndCrm \
+            --project src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj \
+            --startup-project src/Outfitters.API/Outfitters.API.csproj \
+            --output-dir Persistence/Migrations
+
+      - name: Build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet build OutfittersRetailManagementSystem.sln --configuration Release
+          dotnet test OutfittersRetailManagementSystem.sln --configuration Release --no-build
+
+      - name: Commit milestone 8
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src tests OutfittersRetailManagementSystem.sln Directory.Build.props docker-compose.yml global.json README.md .gitignore
+          git commit -m "Milestone 8 - Add customer loyalty and CRM"
+          git push
