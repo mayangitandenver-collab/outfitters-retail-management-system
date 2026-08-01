@@ -179,7 +179,7 @@ jobs:
               public DbSet<StockTransferItem> StockTransferItems => Set<StockTransferItem>();
               public DbSet<StockTransferReceipt> StockTransferReceipts => Set<StockTransferReceipt>();
               public DbSet<StockTransferReceiptItem> StockTransferReceiptItems => Set<StockTransferReceiptItem>();
-"""
+          """
           if dbset_anchor not in text:
               raise SystemExit("Transfer DbSet anchor not found")
           text = text.replace(dbset_anchor, dbset_insert, 1)
@@ -194,7 +194,7 @@ jobs:
                       entity.HasOne(x => x.ProductVariant).WithMany()
                           .HasForeignKey(x => x.ProductVariantId).OnDelete(DeleteBehavior.Restrict);
                   });
-"""
+          """
           transfer_config = config_anchor + """
                   builder.Entity<StockTransfer>(entity =>
                   {
@@ -246,7 +246,7 @@ jobs:
                       entity.HasOne(x => x.ProductVariant).WithMany()
                           .HasForeignKey(x => x.ProductVariantId).OnDelete(DeleteBehavior.Restrict);
                   });
-"""
+          """
           if config_anchor not in text:
               raise SystemExit("Transfer model configuration anchor not found")
           text = text.replace(config_anchor, transfer_config, 1)
