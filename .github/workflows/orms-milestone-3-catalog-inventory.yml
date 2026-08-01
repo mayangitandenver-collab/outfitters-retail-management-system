@@ -1,0 +1,821 @@
+name: ORMS Milestone 3 - Catalog and Inventory
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  milestone3:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Write catalog and inventory domain
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p src/Outfitters.Domain/Entities
+          mkdir -p src/Outfitters.Domain/Enums
+          mkdir -p src/Outfitters.Application/Catalog
+          mkdir -p src/Outfitters.Application/Inventory
+          mkdir -p src/Outfitters.API/Controllers
+
+          cat > src/Outfitters.Domain/Entities/Category.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class Category : BaseEntity
+          {
+              public string Name { get; set; } = string.Empty;
+              public string? Description { get; set; }
+              public Guid? ParentCategoryId { get; set; }
+              public Category? ParentCategory { get; set; }
+              public bool IsActive { get; set; } = true;
+              public ICollection<Category> Children { get; set; } = new List<Category>();
+              public ICollection<Product> Products { get; set; } = new List<Product>();
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/Brand.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class Brand : BaseEntity
+          {
+              public string Name { get; set; } = string.Empty;
+              public string? Description { get; set; }
+              public bool IsActive { get; set; } = true;
+              public ICollection<Product> Products { get; set; } = new List<Product>();
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/Product.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class Product : BaseEntity
+          {
+              public string Sku { get; set; } = string.Empty;
+              public string Name { get; set; } = string.Empty;
+              public string? Description { get; set; }
+              public Guid CategoryId { get; set; }
+              public Category Category { get; set; } = null!;
+              public Guid? BrandId { get; set; }
+              public Brand? Brand { get; set; }
+              public string? Gender { get; set; }
+              public string? Season { get; set; }
+              public string? Material { get; set; }
+              public bool IsActive { get; set; } = true;
+              public ICollection<ProductVariant> Variants { get; set; } = new List<ProductVariant>();
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/ProductVariant.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class ProductVariant : BaseEntity
+          {
+              public Guid ProductId { get; set; }
+              public Product Product { get; set; } = null!;
+              public string VariantSku { get; set; } = string.Empty;
+              public string Barcode { get; set; } = string.Empty;
+              public string? Size { get; set; }
+              public string? Color { get; set; }
+              public decimal CostPrice { get; set; }
+              public decimal SellingPrice { get; set; }
+              public bool IsActive { get; set; } = true;
+              public ICollection<InventoryItem> InventoryItems { get; set; } = new List<InventoryItem>();
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/InventoryItem.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class InventoryItem : BaseEntity
+          {
+              public Guid StoreId { get; set; }
+              public Store Store { get; set; } = null!;
+              public Guid ProductVariantId { get; set; }
+              public ProductVariant ProductVariant { get; set; } = null!;
+              public decimal QuantityOnHand { get; set; }
+              public decimal ReservedQuantity { get; set; }
+              public decimal ReorderPoint { get; set; }
+              public decimal MinimumStock { get; set; }
+              public decimal MaximumStock { get; set; }
+              public decimal AvailableQuantity => QuantityOnHand - ReservedQuantity;
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Enums/InventoryTransactionType.cs <<'EOF'
+          namespace Outfitters.Domain.Enums;
+
+          public enum InventoryTransactionType
+          {
+              OpeningBalance = 1,
+              Purchase = 2,
+              Sale = 3,
+              Return = 4,
+              Adjustment = 5,
+              TransferIn = 6,
+              TransferOut = 7,
+              Damage = 8,
+              StockCount = 9
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/InventoryTransaction.cs <<'EOF'
+          using Outfitters.Domain.Common;
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class InventoryTransaction : BaseEntity
+          {
+              public Guid StoreId { get; set; }
+              public Store Store { get; set; } = null!;
+              public Guid ProductVariantId { get; set; }
+              public ProductVariant ProductVariant { get; set; } = null!;
+              public InventoryTransactionType TransactionType { get; set; }
+              public decimal QuantityChange { get; set; }
+              public decimal BalanceAfter { get; set; }
+              public string? ReferenceNumber { get; set; }
+              public string? Remarks { get; set; }
+              public Guid? CreatedByUserId { get; set; }
+              public ApplicationUser? CreatedByUser { get; set; }
+          }
+          EOF
+
+          cat > src/Outfitters.Application/Catalog/CatalogContracts.cs <<'EOF'
+          namespace Outfitters.Application.Catalog;
+
+          public sealed record CreateCategoryRequest(
+              string Name,
+              string? Description,
+              Guid? ParentCategoryId);
+
+          public sealed record CreateBrandRequest(
+              string Name,
+              string? Description);
+
+          public sealed record CreateProductVariantRequest(
+              string VariantSku,
+              string Barcode,
+              string? Size,
+              string? Color,
+              decimal CostPrice,
+              decimal SellingPrice);
+
+          public sealed record CreateProductRequest(
+              string Sku,
+              string Name,
+              string? Description,
+              Guid CategoryId,
+              Guid? BrandId,
+              string? Gender,
+              string? Season,
+              string? Material,
+              IReadOnlyCollection<CreateProductVariantRequest> Variants);
+          EOF
+
+          cat > src/Outfitters.Application/Inventory/InventoryContracts.cs <<'EOF'
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Application.Inventory;
+
+          public sealed record AdjustInventoryRequest(
+              Guid StoreId,
+              Guid ProductVariantId,
+              decimal QuantityChange,
+              InventoryTransactionType TransactionType,
+              string? ReferenceNumber,
+              string? Remarks);
+          EOF
+
+      - name: Update database context
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Infrastructure/Persistence/ApplicationDbContext.cs <<'EOF'
+          using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Domain.Entities;
+
+          namespace Outfitters.Infrastructure.Persistence;
+
+          public sealed class ApplicationDbContext
+              : IdentityDbContext<ApplicationUser, ApplicationRole, Guid>
+          {
+              public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
+                  : base(options)
+              {
+              }
+
+              public DbSet<Company> Companies => Set<Company>();
+              public DbSet<Store> Stores => Set<Store>();
+              public DbSet<Category> Categories => Set<Category>();
+              public DbSet<Brand> Brands => Set<Brand>();
+              public DbSet<Product> Products => Set<Product>();
+              public DbSet<ProductVariant> ProductVariants => Set<ProductVariant>();
+              public DbSet<InventoryItem> InventoryItems => Set<InventoryItem>();
+              public DbSet<InventoryTransaction> InventoryTransactions => Set<InventoryTransaction>();
+
+              protected override void OnModelCreating(ModelBuilder builder)
+              {
+                  base.OnModelCreating(builder);
+
+                  builder.Entity<Company>(entity =>
+                  {
+                      entity.HasIndex(x => x.Code).IsUnique();
+                      entity.Property(x => x.Code).HasMaxLength(30).IsRequired();
+                      entity.Property(x => x.Name).HasMaxLength(200).IsRequired();
+                  });
+
+                  builder.Entity<Store>(entity =>
+                  {
+                      entity.HasIndex(x => new { x.CompanyId, x.Code }).IsUnique();
+                      entity.Property(x => x.Code).HasMaxLength(30).IsRequired();
+                      entity.Property(x => x.Name).HasMaxLength(200).IsRequired();
+                      entity.HasOne(x => x.Company)
+                          .WithMany(x => x.Stores)
+                          .HasForeignKey(x => x.CompanyId)
+                          .OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<ApplicationUser>(entity =>
+                  {
+                      entity.Property(x => x.FirstName).HasMaxLength(100).IsRequired();
+                      entity.Property(x => x.LastName).HasMaxLength(100).IsRequired();
+                      entity.HasOne(x => x.Store)
+                          .WithMany()
+                          .HasForeignKey(x => x.StoreId)
+                          .OnDelete(DeleteBehavior.SetNull);
+                  });
+
+                  builder.Entity<Category>(entity =>
+                  {
+                      entity.HasIndex(x => x.Name);
+                      entity.Property(x => x.Name).HasMaxLength(150).IsRequired();
+                      entity.HasOne(x => x.ParentCategory)
+                          .WithMany(x => x.Children)
+                          .HasForeignKey(x => x.ParentCategoryId)
+                          .OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<Brand>(entity =>
+                  {
+                      entity.HasIndex(x => x.Name).IsUnique();
+                      entity.Property(x => x.Name).HasMaxLength(150).IsRequired();
+                  });
+
+                  builder.Entity<Product>(entity =>
+                  {
+                      entity.HasIndex(x => x.Sku).IsUnique();
+                      entity.Property(x => x.Sku).HasMaxLength(80).IsRequired();
+                      entity.Property(x => x.Name).HasMaxLength(200).IsRequired();
+                      entity.HasOne(x => x.Category)
+                          .WithMany(x => x.Products)
+                          .HasForeignKey(x => x.CategoryId)
+                          .OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.Brand)
+                          .WithMany(x => x.Products)
+                          .HasForeignKey(x => x.BrandId)
+                          .OnDelete(DeleteBehavior.SetNull);
+                  });
+
+                  builder.Entity<ProductVariant>(entity =>
+                  {
+                      entity.HasIndex(x => x.VariantSku).IsUnique();
+                      entity.HasIndex(x => x.Barcode).IsUnique();
+                      entity.Property(x => x.VariantSku).HasMaxLength(100).IsRequired();
+                      entity.Property(x => x.Barcode).HasMaxLength(100).IsRequired();
+                      entity.Property(x => x.CostPrice).HasPrecision(18, 2);
+                      entity.Property(x => x.SellingPrice).HasPrecision(18, 2);
+                      entity.HasOne(x => x.Product)
+                          .WithMany(x => x.Variants)
+                          .HasForeignKey(x => x.ProductId)
+                          .OnDelete(DeleteBehavior.Cascade);
+                  });
+
+                  builder.Entity<InventoryItem>(entity =>
+                  {
+                      entity.HasIndex(x => new { x.StoreId, x.ProductVariantId }).IsUnique();
+                      entity.Property(x => x.QuantityOnHand).HasPrecision(18, 3);
+                      entity.Property(x => x.ReservedQuantity).HasPrecision(18, 3);
+                      entity.Property(x => x.ReorderPoint).HasPrecision(18, 3);
+                      entity.Property(x => x.MinimumStock).HasPrecision(18, 3);
+                      entity.Property(x => x.MaximumStock).HasPrecision(18, 3);
+                      entity.HasOne(x => x.Store)
+                          .WithMany()
+                          .HasForeignKey(x => x.StoreId)
+                          .OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.ProductVariant)
+                          .WithMany(x => x.InventoryItems)
+                          .HasForeignKey(x => x.ProductVariantId)
+                          .OnDelete(DeleteBehavior.Restrict);
+                      entity.Ignore(x => x.AvailableQuantity);
+                  });
+
+                  builder.Entity<InventoryTransaction>(entity =>
+                  {
+                      entity.Property(x => x.QuantityChange).HasPrecision(18, 3);
+                      entity.Property(x => x.BalanceAfter).HasPrecision(18, 3);
+                      entity.HasOne(x => x.Store)
+                          .WithMany()
+                          .HasForeignKey(x => x.StoreId)
+                          .OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.ProductVariant)
+                          .WithMany()
+                          .HasForeignKey(x => x.ProductVariantId)
+                          .OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.CreatedByUser)
+                          .WithMany()
+                          .HasForeignKey(x => x.CreatedByUserId)
+                          .OnDelete(DeleteBehavior.SetNull);
+                  });
+              }
+          }
+          EOF
+
+      - name: Write catalog controllers
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.API/Controllers/CategoriesController.cs <<'EOF'
+          using Microsoft.AspNetCore.Authorization;
+          using Microsoft.AspNetCore.Mvc;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Application.Catalog;
+          using Outfitters.Domain.Entities;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.API.Controllers;
+
+          [ApiController]
+          [Authorize]
+          [Route("api/categories")]
+          public sealed class CategoriesController : ControllerBase
+          {
+              private readonly ApplicationDbContext _db;
+
+              public CategoriesController(ApplicationDbContext db) => _db = db;
+
+              [HttpGet]
+              public async Task<IActionResult> GetAll()
+              {
+                  var items = await _db.Categories
+                      .AsNoTracking()
+                      .OrderBy(x => x.Name)
+                      .Select(x => new
+                      {
+                          x.Id,
+                          x.Name,
+                          x.Description,
+                          x.ParentCategoryId,
+                          x.IsActive
+                      })
+                      .ToListAsync();
+
+                  return Ok(items);
+              }
+
+              [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager")]
+              [HttpPost]
+              public async Task<IActionResult> Create(CreateCategoryRequest request)
+              {
+                  if (string.IsNullOrWhiteSpace(request.Name))
+                  {
+                      return BadRequest("Category name is required.");
+                  }
+
+                  if (request.ParentCategoryId.HasValue &&
+                      !await _db.Categories.AnyAsync(x => x.Id == request.ParentCategoryId.Value))
+                  {
+                      return BadRequest("Parent category was not found.");
+                  }
+
+                  var category = new Category
+                  {
+                      Name = request.Name.Trim(),
+                      Description = request.Description?.Trim(),
+                      ParentCategoryId = request.ParentCategoryId
+                  };
+
+                  _db.Categories.Add(category);
+                  await _db.SaveChangesAsync();
+
+                  return CreatedAtAction(nameof(GetAll), new { id = category.Id }, category);
+              }
+          }
+          EOF
+
+          cat > src/Outfitters.API/Controllers/BrandsController.cs <<'EOF'
+          using Microsoft.AspNetCore.Authorization;
+          using Microsoft.AspNetCore.Mvc;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Application.Catalog;
+          using Outfitters.Domain.Entities;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.API.Controllers;
+
+          [ApiController]
+          [Authorize]
+          [Route("api/brands")]
+          public sealed class BrandsController : ControllerBase
+          {
+              private readonly ApplicationDbContext _db;
+
+              public BrandsController(ApplicationDbContext db) => _db = db;
+
+              [HttpGet]
+              public async Task<IActionResult> GetAll()
+              {
+                  var items = await _db.Brands
+                      .AsNoTracking()
+                      .OrderBy(x => x.Name)
+                      .Select(x => new { x.Id, x.Name, x.Description, x.IsActive })
+                      .ToListAsync();
+
+                  return Ok(items);
+              }
+
+              [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager")]
+              [HttpPost]
+              public async Task<IActionResult> Create(CreateBrandRequest request)
+              {
+                  var name = request.Name.Trim();
+                  if (string.IsNullOrWhiteSpace(name))
+                  {
+                      return BadRequest("Brand name is required.");
+                  }
+
+                  if (await _db.Brands.AnyAsync(x => x.Name == name))
+                  {
+                      return Conflict("A brand with this name already exists.");
+                  }
+
+                  var brand = new Brand
+                  {
+                      Name = name,
+                      Description = request.Description?.Trim()
+                  };
+
+                  _db.Brands.Add(brand);
+                  await _db.SaveChangesAsync();
+
+                  return Ok(brand);
+              }
+          }
+          EOF
+
+          cat > src/Outfitters.API/Controllers/ProductsController.cs <<'EOF'
+          using Microsoft.AspNetCore.Authorization;
+          using Microsoft.AspNetCore.Mvc;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Application.Catalog;
+          using Outfitters.Domain.Entities;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.API.Controllers;
+
+          [ApiController]
+          [Authorize]
+          [Route("api/products")]
+          public sealed class ProductsController : ControllerBase
+          {
+              private readonly ApplicationDbContext _db;
+
+              public ProductsController(ApplicationDbContext db) => _db = db;
+
+              [HttpGet]
+              public async Task<IActionResult> GetAll([FromQuery] string? search)
+              {
+                  var query = _db.Products
+                      .AsNoTracking()
+                      .Include(x => x.Category)
+                      .Include(x => x.Brand)
+                      .Include(x => x.Variants)
+                      .AsQueryable();
+
+                  if (!string.IsNullOrWhiteSpace(search))
+                  {
+                      var term = search.Trim().ToLower();
+                      query = query.Where(x =>
+                          x.Name.ToLower().Contains(term) ||
+                          x.Sku.ToLower().Contains(term) ||
+                          x.Variants.Any(v =>
+                              v.Barcode.ToLower().Contains(term) ||
+                              v.VariantSku.ToLower().Contains(term)));
+                  }
+
+                  var items = await query
+                      .OrderBy(x => x.Name)
+                      .Select(x => new
+                      {
+                          x.Id,
+                          x.Sku,
+                          x.Name,
+                          Category = x.Category.Name,
+                          Brand = x.Brand == null ? null : x.Brand.Name,
+                          x.IsActive,
+                          Variants = x.Variants.Select(v => new
+                          {
+                              v.Id,
+                              v.VariantSku,
+                              v.Barcode,
+                              v.Size,
+                              v.Color,
+                              v.CostPrice,
+                              v.SellingPrice,
+                              v.IsActive
+                          })
+                      })
+                      .ToListAsync();
+
+                  return Ok(items);
+              }
+
+              [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager,InventoryClerk")]
+              [HttpPost]
+              public async Task<IActionResult> Create(CreateProductRequest request)
+              {
+                  if (!await _db.Categories.AnyAsync(x => x.Id == request.CategoryId))
+                  {
+                      return BadRequest("Category was not found.");
+                  }
+
+                  if (request.BrandId.HasValue &&
+                      !await _db.Brands.AnyAsync(x => x.Id == request.BrandId.Value))
+                  {
+                      return BadRequest("Brand was not found.");
+                  }
+
+                  if (await _db.Products.AnyAsync(x => x.Sku == request.Sku))
+                  {
+                      return Conflict("Product SKU already exists.");
+                  }
+
+                  var variantSkus = request.Variants.Select(x => x.VariantSku).ToArray();
+                  var barcodes = request.Variants.Select(x => x.Barcode).ToArray();
+
+                  if (variantSkus.Distinct(StringComparer.OrdinalIgnoreCase).Count() != variantSkus.Length)
+                  {
+                      return BadRequest("Variant SKUs must be unique.");
+                  }
+
+                  if (barcodes.Distinct(StringComparer.OrdinalIgnoreCase).Count() != barcodes.Length)
+                  {
+                      return BadRequest("Barcodes must be unique.");
+                  }
+
+                  if (await _db.ProductVariants.AnyAsync(x =>
+                      variantSkus.Contains(x.VariantSku) || barcodes.Contains(x.Barcode)))
+                  {
+                      return Conflict("A variant SKU or barcode already exists.");
+                  }
+
+                  var product = new Product
+                  {
+                      Sku = request.Sku.Trim(),
+                      Name = request.Name.Trim(),
+                      Description = request.Description?.Trim(),
+                      CategoryId = request.CategoryId,
+                      BrandId = request.BrandId,
+                      Gender = request.Gender?.Trim(),
+                      Season = request.Season?.Trim(),
+                      Material = request.Material?.Trim(),
+                      Variants = request.Variants.Select(v => new ProductVariant
+                      {
+                          VariantSku = v.VariantSku.Trim(),
+                          Barcode = v.Barcode.Trim(),
+                          Size = v.Size?.Trim(),
+                          Color = v.Color?.Trim(),
+                          CostPrice = v.CostPrice,
+                          SellingPrice = v.SellingPrice
+                      }).ToList()
+                  };
+
+                  _db.Products.Add(product);
+                  await _db.SaveChangesAsync();
+
+                  return Ok(new { product.Id, product.Sku, product.Name });
+              }
+          }
+          EOF
+
+      - name: Write inventory controller
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.API/Controllers/InventoryController.cs <<'EOF'
+          using System.Security.Claims;
+          using Microsoft.AspNetCore.Authorization;
+          using Microsoft.AspNetCore.Mvc;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Application.Inventory;
+          using Outfitters.Domain.Entities;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.API.Controllers;
+
+          [ApiController]
+          [Authorize]
+          [Route("api/inventory")]
+          public sealed class InventoryController : ControllerBase
+          {
+              private readonly ApplicationDbContext _db;
+
+              public InventoryController(ApplicationDbContext db) => _db = db;
+
+              [HttpGet]
+              public async Task<IActionResult> Get([FromQuery] Guid storeId)
+              {
+                  var items = await _db.InventoryItems
+                      .AsNoTracking()
+                      .Where(x => x.StoreId == storeId)
+                      .Include(x => x.ProductVariant)
+                      .ThenInclude(x => x.Product)
+                      .OrderBy(x => x.ProductVariant.Product.Name)
+                      .Select(x => new
+                      {
+                          x.Id,
+                          x.StoreId,
+                          x.ProductVariantId,
+                          Product = x.ProductVariant.Product.Name,
+                          x.ProductVariant.VariantSku,
+                          x.ProductVariant.Barcode,
+                          x.ProductVariant.Size,
+                          x.ProductVariant.Color,
+                          x.QuantityOnHand,
+                          x.ReservedQuantity,
+                          AvailableQuantity = x.QuantityOnHand - x.ReservedQuantity,
+                          x.ReorderPoint,
+                          IsLowStock = x.QuantityOnHand - x.ReservedQuantity <= x.ReorderPoint
+                      })
+                      .ToListAsync();
+
+                  return Ok(items);
+              }
+
+              [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager,InventoryClerk")]
+              [HttpPost("adjust")]
+              public async Task<IActionResult> Adjust(AdjustInventoryRequest request)
+              {
+                  if (!await _db.Stores.AnyAsync(x => x.Id == request.StoreId && x.IsActive))
+                  {
+                      return BadRequest("Store was not found.");
+                  }
+
+                  if (!await _db.ProductVariants.AnyAsync(x =>
+                      x.Id == request.ProductVariantId && x.IsActive))
+                  {
+                      return BadRequest("Product variant was not found.");
+                  }
+
+                  await using var transaction = await _db.Database.BeginTransactionAsync();
+
+                  var item = await _db.InventoryItems.SingleOrDefaultAsync(x =>
+                      x.StoreId == request.StoreId &&
+                      x.ProductVariantId == request.ProductVariantId);
+
+                  if (item is null)
+                  {
+                      item = new InventoryItem
+                      {
+                          StoreId = request.StoreId,
+                          ProductVariantId = request.ProductVariantId
+                      };
+                      _db.InventoryItems.Add(item);
+                  }
+
+                  var newBalance = item.QuantityOnHand + request.QuantityChange;
+                  if (newBalance < 0)
+                  {
+                      return BadRequest("This adjustment would create negative stock.");
+                  }
+
+                  item.QuantityOnHand = newBalance;
+                  item.UpdatedAtUtc = DateTime.UtcNow;
+
+                  Guid? userId = null;
+                  var userIdText = User.FindFirstValue(ClaimTypes.NameIdentifier);
+                  if (Guid.TryParse(userIdText, out var parsedUserId))
+                  {
+                      userId = parsedUserId;
+                  }
+
+                  _db.InventoryTransactions.Add(new InventoryTransaction
+                  {
+                      StoreId = request.StoreId,
+                      ProductVariantId = request.ProductVariantId,
+                      TransactionType = request.TransactionType,
+                      QuantityChange = request.QuantityChange,
+                      BalanceAfter = newBalance,
+                      ReferenceNumber = request.ReferenceNumber?.Trim(),
+                      Remarks = request.Remarks?.Trim(),
+                      CreatedByUserId = userId
+                  });
+
+                  await _db.SaveChangesAsync();
+                  await transaction.CommitAsync();
+
+                  return Ok(new
+                  {
+                      item.StoreId,
+                      item.ProductVariantId,
+                      item.QuantityOnHand,
+                      item.ReservedQuantity,
+                      AvailableQuantity = item.QuantityOnHand - item.ReservedQuantity
+                  });
+              }
+
+              [HttpGet("history")]
+              public async Task<IActionResult> History(
+                  [FromQuery] Guid storeId,
+                  [FromQuery] Guid? productVariantId)
+              {
+                  var query = _db.InventoryTransactions
+                      .AsNoTracking()
+                      .Where(x => x.StoreId == storeId);
+
+                  if (productVariantId.HasValue)
+                  {
+                      query = query.Where(x => x.ProductVariantId == productVariantId.Value);
+                  }
+
+                  var items = await query
+                      .OrderByDescending(x => x.CreatedAtUtc)
+                      .Take(500)
+                      .Select(x => new
+                      {
+                          x.Id,
+                          x.ProductVariantId,
+                          x.TransactionType,
+                          x.QuantityChange,
+                          x.BalanceAfter,
+                          x.ReferenceNumber,
+                          x.Remarks,
+                          x.CreatedAtUtc,
+                          x.CreatedByUserId
+                      })
+                      .ToListAsync();
+
+                  return Ok(items);
+              }
+          }
+          EOF
+
+      - name: Compile before migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore OutfittersRetailManagementSystem.sln
+          dotnet build OutfittersRetailManagementSystem.sln --configuration Release --no-restore
+
+      - name: Create EF Core migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet tool install --global dotnet-ef --version 9.0.*
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          dotnet ef migrations add AddCatalogAndInventory \
+            --project src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj \
+            --startup-project src/Outfitters.API/Outfitters.API.csproj \
+            --output-dir Persistence/Migrations
+
+      - name: Build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet build OutfittersRetailManagementSystem.sln --configuration Release
+          dotnet test OutfittersRetailManagementSystem.sln --configuration Release --no-build
+
+      - name: Commit milestone 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src tests OutfittersRetailManagementSystem.sln Directory.Build.props docker-compose.yml global.json README.md .gitignore
+          git commit -m "Milestone 3 - Add catalog, variants, and per-store inventory"
+          git push
