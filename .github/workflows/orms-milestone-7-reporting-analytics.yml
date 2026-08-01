@@ -1,0 +1,543 @@
+name: ORMS Milestone 7 - Reporting and Analytics
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  milestone7:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Write reporting contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p src/Outfitters.Application/Reporting
+          mkdir -p src/Outfitters.API/Controllers
+
+          cat > src/Outfitters.Application/Reporting/ReportingContracts.cs <<'EOF'
+          namespace Outfitters.Application.Reporting;
+
+          public sealed record ReportingDateRange(
+              DateOnly StartDate,
+              DateOnly EndDate);
+
+          public sealed record MonthlySalesPoint(
+              int Year,
+              int Month,
+              string MonthName,
+              decimal GrossSales,
+              decimal Discounts,
+              decimal Taxes,
+              decimal NetSales,
+              decimal UnitsSold,
+              int Transactions);
+
+          public sealed record StoreSalesPoint(
+              Guid StoreId,
+              string StoreCode,
+              string StoreName,
+              decimal GrossSales,
+              decimal Discounts,
+              decimal Taxes,
+              decimal NetSales,
+              decimal UnitsSold,
+              int Transactions,
+              decimal AverageTransactionValue);
+
+          public sealed record InventoryValuationPoint(
+              Guid StoreId,
+              string StoreCode,
+              string StoreName,
+              decimal QuantityOnHand,
+              decimal CostValue,
+              decimal RetailValue,
+              decimal PotentialMargin);
+
+          public sealed record LowStockPoint(
+              Guid StoreId,
+              string StoreName,
+              Guid ProductVariantId,
+              string ProductName,
+              string VariantSku,
+              string Barcode,
+              string? Size,
+              string? Color,
+              decimal QuantityOnHand,
+              decimal ReservedQuantity,
+              decimal AvailableQuantity,
+              decimal ReorderPoint,
+              decimal SuggestedOrderQuantity);
+          EOF
+
+      - name: Write reporting controller
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.API/Controllers/ReportsController.cs <<'EOF'
+          using Microsoft.AspNetCore.Authorization;
+          using Microsoft.AspNetCore.Mvc;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Domain.Enums;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.API.Controllers;
+
+          [ApiController]
+          [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager")]
+          [Route("api/reports")]
+          public sealed class ReportsController : ControllerBase
+          {
+              private readonly ApplicationDbContext _db;
+
+              public ReportsController(ApplicationDbContext db) => _db = db;
+
+              [HttpGet("dashboard")]
+              public async Task<IActionResult> Dashboard(
+                  [FromQuery] Guid? storeId,
+                  [FromQuery] DateOnly? startDate,
+                  [FromQuery] DateOnly? endDate)
+              {
+                  var (start, endExclusive) = ResolveRange(startDate, endDate);
+
+                  var sales = _db.Sales
+                      .AsNoTracking()
+                      .Where(x =>
+                          x.CreatedAtUtc >= start &&
+                          x.CreatedAtUtc < endExclusive &&
+                          x.Status != SaleStatus.Voided);
+
+                  if (storeId.HasValue)
+                  {
+                      sales = sales.Where(x => x.StoreId == storeId.Value);
+                  }
+
+                  var saleIds = sales.Select(x => x.Id);
+
+                  var purchaseOrders = _db.PurchaseOrders
+                      .AsNoTracking()
+                      .Where(x =>
+                          x.OrderDateUtc >= start &&
+                          x.OrderDateUtc < endExclusive &&
+                          x.Status != PurchaseOrderStatus.Cancelled);
+
+                  if (storeId.HasValue)
+                  {
+                      purchaseOrders = purchaseOrders.Where(x => x.StoreId == storeId.Value);
+                  }
+
+                  var inventory = _db.InventoryItems
+                      .AsNoTracking()
+                      .AsQueryable();
+
+                  if (storeId.HasValue)
+                  {
+                      inventory = inventory.Where(x => x.StoreId == storeId.Value);
+                  }
+
+                  var grossSales = await sales.SumAsync(x => (decimal?)x.GrandTotal) ?? 0m;
+                  var discounts = await sales.SumAsync(x => (decimal?)x.DiscountTotal) ?? 0m;
+                  var taxes = await sales.SumAsync(x => (decimal?)x.TaxTotal) ?? 0m;
+                  var transactions = await sales.CountAsync();
+                  var unitsSold = await _db.SaleItems
+                      .AsNoTracking()
+                      .Where(x => saleIds.Contains(x.SaleId))
+                      .SumAsync(x => (decimal?)x.Quantity) ?? 0m;
+
+                  var inventoryCostValue = await inventory
+                      .SumAsync(x => (decimal?)(x.QuantityOnHand * x.ProductVariant.CostPrice)) ?? 0m;
+
+                  var inventoryRetailValue = await inventory
+                      .SumAsync(x => (decimal?)(x.QuantityOnHand * x.ProductVariant.SellingPrice)) ?? 0m;
+
+                  var lowStockCount = await inventory.CountAsync(x =>
+                      x.QuantityOnHand - x.ReservedQuantity <= x.ReorderPoint);
+
+                  var result = new
+                  {
+                      StartDate = DateOnly.FromDateTime(start),
+                      EndDate = DateOnly.FromDateTime(endExclusive.AddDays(-1)),
+                      GrossSales = grossSales,
+                      Discounts = discounts,
+                      Taxes = taxes,
+                      NetSales = grossSales,
+                      Transactions = transactions,
+                      UnitsSold = unitsSold,
+                      AverageTransactionValue =
+                          transactions == 0 ? 0m : decimal.Round(grossSales / transactions, 2),
+                      PurchaseOrderValue =
+                          await purchaseOrders.SumAsync(x => (decimal?)x.GrandTotal) ?? 0m,
+                      InventoryCostValue = inventoryCostValue,
+                      InventoryRetailValue = inventoryRetailValue,
+                      PotentialInventoryMargin = inventoryRetailValue - inventoryCostValue,
+                      LowStockItems = lowStockCount
+                  };
+
+                  return Ok(result);
+              }
+
+              [HttpGet("monthly-sales")]
+              public async Task<IActionResult> MonthlySales(
+                  [FromQuery] Guid? storeId,
+                  [FromQuery] int? year)
+              {
+                  var selectedYear = year ?? DateTime.UtcNow.Year;
+                  var start = new DateTime(selectedYear, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+                  var end = start.AddYears(1);
+
+                  var sales = _db.Sales
+                      .AsNoTracking()
+                      .Where(x =>
+                          x.CreatedAtUtc >= start &&
+                          x.CreatedAtUtc < end &&
+                          x.Status != SaleStatus.Voided);
+
+                  if (storeId.HasValue)
+                  {
+                      sales = sales.Where(x => x.StoreId == storeId.Value);
+                  }
+
+                  var grouped = await sales
+                      .GroupBy(x => x.CreatedAtUtc.Month)
+                      .Select(group => new
+                      {
+                          Month = group.Key,
+                          GrossSales = group.Sum(x => x.GrandTotal),
+                          Discounts = group.Sum(x => x.DiscountTotal),
+                          Taxes = group.Sum(x => x.TaxTotal),
+                          Transactions = group.Count(),
+                          UnitsSold = group
+                              .SelectMany(x => x.Items)
+                              .Sum(x => x.Quantity)
+                      })
+                      .ToListAsync();
+
+                  var result = Enumerable.Range(1, 12)
+                      .Select(month =>
+                      {
+                          var data = grouped.SingleOrDefault(x => x.Month == month);
+                          return new
+                          {
+                              Year = selectedYear,
+                              Month = month,
+                              MonthName = new DateTime(selectedYear, month, 1).ToString("MMMM"),
+                              GrossSales = data?.GrossSales ?? 0m,
+                              Discounts = data?.Discounts ?? 0m,
+                              Taxes = data?.Taxes ?? 0m,
+                              NetSales = data?.GrossSales ?? 0m,
+                              UnitsSold = data?.UnitsSold ?? 0m,
+                              Transactions = data?.Transactions ?? 0
+                          };
+                      });
+
+                  return Ok(result);
+              }
+
+              [HttpGet("store-comparison")]
+              public async Task<IActionResult> StoreComparison(
+                  [FromQuery] DateOnly? startDate,
+                  [FromQuery] DateOnly? endDate)
+              {
+                  var (start, endExclusive) = ResolveRange(startDate, endDate);
+
+                  var result = await _db.Stores
+                      .AsNoTracking()
+                      .Where(x => x.IsActive)
+                      .Select(store => new
+                      {
+                          store.Id,
+                          store.Code,
+                          store.Name,
+                          GrossSales = store.Id == Guid.Empty
+                              ? 0m
+                              : _db.Sales
+                                  .Where(s =>
+                                      s.StoreId == store.Id &&
+                                      s.CreatedAtUtc >= start &&
+                                      s.CreatedAtUtc < endExclusive &&
+                                      s.Status != SaleStatus.Voided)
+                                  .Sum(s => (decimal?)s.GrandTotal) ?? 0m,
+                          Discounts = _db.Sales
+                              .Where(s =>
+                                  s.StoreId == store.Id &&
+                                  s.CreatedAtUtc >= start &&
+                                  s.CreatedAtUtc < endExclusive &&
+                                  s.Status != SaleStatus.Voided)
+                              .Sum(s => (decimal?)s.DiscountTotal) ?? 0m,
+                          Taxes = _db.Sales
+                              .Where(s =>
+                                  s.StoreId == store.Id &&
+                                  s.CreatedAtUtc >= start &&
+                                  s.CreatedAtUtc < endExclusive &&
+                                  s.Status != SaleStatus.Voided)
+                              .Sum(s => (decimal?)s.TaxTotal) ?? 0m,
+                          Transactions = _db.Sales.Count(s =>
+                              s.StoreId == store.Id &&
+                              s.CreatedAtUtc >= start &&
+                              s.CreatedAtUtc < endExclusive &&
+                              s.Status != SaleStatus.Voided),
+                          UnitsSold = _db.SaleItems
+                              .Where(item =>
+                                  item.Sale.StoreId == store.Id &&
+                                  item.Sale.CreatedAtUtc >= start &&
+                                  item.Sale.CreatedAtUtc < endExclusive &&
+                                  item.Sale.Status != SaleStatus.Voided)
+                              .Sum(item => (decimal?)item.Quantity) ?? 0m
+                      })
+                      .OrderByDescending(x => x.GrossSales)
+                      .ToListAsync();
+
+                  return Ok(result.Select(x => new
+                  {
+                      StoreId = x.Id,
+                      StoreCode = x.Code,
+                      StoreName = x.Name,
+                      x.GrossSales,
+                      x.Discounts,
+                      x.Taxes,
+                      NetSales = x.GrossSales,
+                      x.UnitsSold,
+                      x.Transactions,
+                      AverageTransactionValue = x.Transactions == 0
+                          ? 0m
+                          : decimal.Round(x.GrossSales / x.Transactions, 2)
+                  }));
+              }
+
+              [HttpGet("inventory-valuation")]
+              public async Task<IActionResult> InventoryValuation([FromQuery] Guid? storeId)
+              {
+                  var query = _db.InventoryItems
+                      .AsNoTracking()
+                      .Include(x => x.Store)
+                      .Include(x => x.ProductVariant)
+                      .AsQueryable();
+
+                  if (storeId.HasValue)
+                  {
+                      query = query.Where(x => x.StoreId == storeId.Value);
+                  }
+
+                  var result = await query
+                      .GroupBy(x => new
+                      {
+                          x.StoreId,
+                          x.Store.Code,
+                          x.Store.Name
+                      })
+                      .Select(group => new
+                      {
+                          group.Key.StoreId,
+                          StoreCode = group.Key.Code,
+                          StoreName = group.Key.Name,
+                          QuantityOnHand = group.Sum(x => x.QuantityOnHand),
+                          CostValue = group.Sum(x =>
+                              x.QuantityOnHand * x.ProductVariant.CostPrice),
+                          RetailValue = group.Sum(x =>
+                              x.QuantityOnHand * x.ProductVariant.SellingPrice)
+                      })
+                      .OrderBy(x => x.StoreName)
+                      .ToListAsync();
+
+                  return Ok(result.Select(x => new
+                  {
+                      x.StoreId,
+                      x.StoreCode,
+                      x.StoreName,
+                      x.QuantityOnHand,
+                      x.CostValue,
+                      x.RetailValue,
+                      PotentialMargin = x.RetailValue - x.CostValue
+                  }));
+              }
+
+              [HttpGet("low-stock")]
+              public async Task<IActionResult> LowStock(
+                  [FromQuery] Guid? storeId,
+                  [FromQuery] bool includeZeroStock = true)
+              {
+                  var query = _db.InventoryItems
+                      .AsNoTracking()
+                      .Include(x => x.Store)
+                      .Include(x => x.ProductVariant)
+                          .ThenInclude(x => x.Product)
+                      .Where(x =>
+                          x.QuantityOnHand - x.ReservedQuantity <= x.ReorderPoint);
+
+                  if (storeId.HasValue)
+                  {
+                      query = query.Where(x => x.StoreId == storeId.Value);
+                  }
+
+                  if (!includeZeroStock)
+                  {
+                      query = query.Where(x => x.QuantityOnHand - x.ReservedQuantity > 0);
+                  }
+
+                  var result = await query
+                      .OrderBy(x => x.Store.Name)
+                      .ThenBy(x => x.ProductVariant.Product.Name)
+                      .Select(x => new
+                      {
+                          x.StoreId,
+                          StoreName = x.Store.Name,
+                          x.ProductVariantId,
+                          ProductName = x.ProductVariant.Product.Name,
+                          x.ProductVariant.VariantSku,
+                          x.ProductVariant.Barcode,
+                          x.ProductVariant.Size,
+                          x.ProductVariant.Color,
+                          x.QuantityOnHand,
+                          x.ReservedQuantity,
+                          AvailableQuantity = x.QuantityOnHand - x.ReservedQuantity,
+                          x.ReorderPoint,
+                          SuggestedOrderQuantity = x.MaximumStock > 0
+                              ? Math.Max(
+                                  0,
+                                  x.MaximumStock -
+                                  (x.QuantityOnHand - x.ReservedQuantity))
+                              : Math.Max(
+                                  0,
+                                  x.ReorderPoint -
+                                  (x.QuantityOnHand - x.ReservedQuantity))
+                      })
+                      .ToListAsync();
+
+                  return Ok(result);
+              }
+
+              [HttpGet("top-products")]
+              public async Task<IActionResult> TopProducts(
+                  [FromQuery] Guid? storeId,
+                  [FromQuery] DateOnly? startDate,
+                  [FromQuery] DateOnly? endDate,
+                  [FromQuery] int limit = 20)
+              {
+                  var (start, endExclusive) = ResolveRange(startDate, endDate);
+                  limit = Math.Clamp(limit, 1, 100);
+
+                  var query = _db.SaleItems
+                      .AsNoTracking()
+                      .Where(x =>
+                          x.Sale.CreatedAtUtc >= start &&
+                          x.Sale.CreatedAtUtc < endExclusive &&
+                          x.Sale.Status != SaleStatus.Voided);
+
+                  if (storeId.HasValue)
+                  {
+                      query = query.Where(x => x.Sale.StoreId == storeId.Value);
+                  }
+
+                  var result = await query
+                      .GroupBy(x => new
+                      {
+                          x.ProductVariantId,
+                          x.ProductVariant.VariantSku,
+                          x.ProductVariant.Barcode,
+                          ProductName = x.ProductVariant.Product.Name,
+                          x.ProductVariant.Size,
+                          x.ProductVariant.Color
+                      })
+                      .Select(group => new
+                      {
+                          group.Key.ProductVariantId,
+                          group.Key.ProductName,
+                          group.Key.VariantSku,
+                          group.Key.Barcode,
+                          group.Key.Size,
+                          group.Key.Color,
+                          UnitsSold = group.Sum(x => x.Quantity),
+                          SalesValue = group.Sum(x => x.LineTotal)
+                      })
+                      .OrderByDescending(x => x.SalesValue)
+                      .ThenByDescending(x => x.UnitsSold)
+                      .Take(limit)
+                      .ToListAsync();
+
+                  return Ok(result);
+              }
+
+              [HttpGet("payment-methods")]
+              public async Task<IActionResult> PaymentMethods(
+                  [FromQuery] Guid? storeId,
+                  [FromQuery] DateOnly? startDate,
+                  [FromQuery] DateOnly? endDate)
+              {
+                  var (start, endExclusive) = ResolveRange(startDate, endDate);
+
+                  var query = _db.SalePayments
+                      .AsNoTracking()
+                      .Where(x =>
+                          x.Sale.CreatedAtUtc >= start &&
+                          x.Sale.CreatedAtUtc < endExclusive &&
+                          x.Sale.Status != SaleStatus.Voided);
+
+                  if (storeId.HasValue)
+                  {
+                      query = query.Where(x => x.Sale.StoreId == storeId.Value);
+                  }
+
+                  var result = await query
+                      .GroupBy(x => x.Method)
+                      .Select(group => new
+                      {
+                          PaymentMethod = group.Key,
+                          Amount = group.Sum(x => x.Amount),
+                          PaymentCount = group.Count()
+                      })
+                      .OrderByDescending(x => x.Amount)
+                      .ToListAsync();
+
+                  return Ok(result);
+              }
+
+              private static (DateTime Start, DateTime EndExclusive) ResolveRange(
+                  DateOnly? startDate,
+                  DateOnly? endDate)
+              {
+                  var defaultEnd = DateOnly.FromDateTime(DateTime.UtcNow);
+                  var resolvedEnd = endDate ?? defaultEnd;
+                  var resolvedStart = startDate ?? resolvedEnd.AddDays(-29);
+
+                  if (resolvedStart > resolvedEnd)
+                  {
+                      throw new ArgumentException("Start date cannot be after end date.");
+                  }
+
+                  return (
+                      resolvedStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                      resolvedEnd.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
+              }
+          }
+          EOF
+
+      - name: Compile and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore OutfittersRetailManagementSystem.sln
+          dotnet build OutfittersRetailManagementSystem.sln --configuration Release --no-restore
+          dotnet test OutfittersRetailManagementSystem.sln --configuration Release --no-build
+
+      - name: Commit milestone 7
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src tests OutfittersRetailManagementSystem.sln Directory.Build.props docker-compose.yml global.json README.md .gitignore
+          git commit -m "Milestone 7 - Add reporting dashboard and analytics"
+          git push
