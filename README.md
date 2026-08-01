@@ -1,37 +1,24 @@
-outfitters-retail-management-system
+# Outfitters Retail Management System
 
-│
+ORMS is a multi-store apparel retail platform built with ASP.NET Core, PostgreSQL, and a future Windows POS client.
 
-├── backend
+## Milestone 1
 
-│   ├── Outfitters.API
+- .NET 9 solution using layered architecture
+- ASP.NET Core minimal API
+- PostgreSQL through Entity Framework Core and Npgsql
+- Swagger/OpenAPI in development
+- `/health` database health endpoint
+- Docker Compose for API and PostgreSQL
+- xUnit tests
+- GitHub Actions build and test workflow
 
-│   ├── Outfitters.Application
+## Run with Docker
 
-│   ├── Outfitters.Domain
+```bash
+docker compose up --build
+```
 
-│   ├── Outfitters.Infrastructure
+API: `http://localhost:8080`
 
-│   └── Outfitters.Shared
-
-│
-
-├── desktop
-
-│   └── Outfitters.Desktop (WinUI/WPF)
-
-│
-
-├── database
-
-│   ├── migrations
-
-│   └── seed
-
-│
-
-├── docs
-
-│
-
-└── README.md
+Swagger: `http://localhost:8080/swagger`
