@@ -1,0 +1,1042 @@
+name: ORMS Milestone 4 - POS Sales Engine
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  milestone4:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Write POS domain model
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p src/Outfitters.Domain/Entities
+          mkdir -p src/Outfitters.Domain/Enums
+          mkdir -p src/Outfitters.Application/Sales
+          mkdir -p src/Outfitters.API/Controllers
+
+          cat > src/Outfitters.Domain/Enums/SaleStatus.cs <<'EOF'
+          namespace Outfitters.Domain.Enums;
+
+          public enum SaleStatus
+          {
+              Completed = 1,
+              Voided = 2,
+              PartiallyReturned = 3,
+              FullyReturned = 4
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Enums/PaymentMethod.cs <<'EOF'
+          namespace Outfitters.Domain.Enums;
+
+          public enum PaymentMethod
+          {
+              Cash = 1,
+              Card = 2,
+              GCash = 3,
+              Maya = 4,
+              BankTransfer = 5,
+              GiftCard = 6,
+              StoreCredit = 7
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Enums/CashSessionStatus.cs <<'EOF'
+          namespace Outfitters.Domain.Enums;
+
+          public enum CashSessionStatus
+          {
+              Open = 1,
+              Closed = 2
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/CashSession.cs <<'EOF'
+          using Outfitters.Domain.Common;
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class CashSession : BaseEntity
+          {
+              public Guid StoreId { get; set; }
+              public Store Store { get; set; } = null!;
+              public Guid OpenedByUserId { get; set; }
+              public ApplicationUser OpenedByUser { get; set; } = null!;
+              public Guid? ClosedByUserId { get; set; }
+              public ApplicationUser? ClosedByUser { get; set; }
+              public DateTime OpenedAtUtc { get; set; } = DateTime.UtcNow;
+              public DateTime? ClosedAtUtc { get; set; }
+              public decimal OpeningCash { get; set; }
+              public decimal? ClosingCash { get; set; }
+              public decimal? ExpectedCash { get; set; }
+              public decimal? CashVariance { get; set; }
+              public CashSessionStatus Status { get; set; } = CashSessionStatus.Open;
+              public ICollection<Sale> Sales { get; set; } = new List<Sale>();
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/Sale.cs <<'EOF'
+          using Outfitters.Domain.Common;
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class Sale : BaseEntity
+          {
+              public Guid StoreId { get; set; }
+              public Store Store { get; set; } = null!;
+              public Guid CashSessionId { get; set; }
+              public CashSession CashSession { get; set; } = null!;
+              public Guid CashierUserId { get; set; }
+              public ApplicationUser CashierUser { get; set; } = null!;
+              public string ReceiptNumber { get; set; } = string.Empty;
+              public decimal Subtotal { get; set; }
+              public decimal DiscountTotal { get; set; }
+              public decimal TaxTotal { get; set; }
+              public decimal GrandTotal { get; set; }
+              public decimal AmountPaid { get; set; }
+              public decimal ChangeDue { get; set; }
+              public SaleStatus Status { get; set; } = SaleStatus.Completed;
+              public string? Notes { get; set; }
+              public ICollection<SaleItem> Items { get; set; } = new List<SaleItem>();
+              public ICollection<SalePayment> Payments { get; set; } = new List<SalePayment>();
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/SaleItem.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class SaleItem : BaseEntity
+          {
+              public Guid SaleId { get; set; }
+              public Sale Sale { get; set; } = null!;
+              public Guid ProductVariantId { get; set; }
+              public ProductVariant ProductVariant { get; set; } = null!;
+              public decimal Quantity { get; set; }
+              public decimal UnitPrice { get; set; }
+              public decimal DiscountAmount { get; set; }
+              public decimal TaxAmount { get; set; }
+              public decimal LineTotal { get; set; }
+              public decimal ReturnedQuantity { get; set; }
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/SalePayment.cs <<'EOF'
+          using Outfitters.Domain.Common;
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class SalePayment : BaseEntity
+          {
+              public Guid SaleId { get; set; }
+              public Sale Sale { get; set; } = null!;
+              public PaymentMethod Method { get; set; }
+              public decimal Amount { get; set; }
+              public string? ReferenceNumber { get; set; }
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/SaleReturn.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class SaleReturn : BaseEntity
+          {
+              public Guid SaleId { get; set; }
+              public Sale Sale { get; set; } = null!;
+              public Guid ProcessedByUserId { get; set; }
+              public ApplicationUser ProcessedByUser { get; set; } = null!;
+              public string ReturnNumber { get; set; } = string.Empty;
+              public decimal RefundAmount { get; set; }
+              public string? Reason { get; set; }
+              public ICollection<SaleReturnItem> Items { get; set; } = new List<SaleReturnItem>();
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/SaleReturnItem.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class SaleReturnItem : BaseEntity
+          {
+              public Guid SaleReturnId { get; set; }
+              public SaleReturn SaleReturn { get; set; } = null!;
+              public Guid SaleItemId { get; set; }
+              public SaleItem SaleItem { get; set; } = null!;
+              public decimal Quantity { get; set; }
+              public decimal RefundAmount { get; set; }
+              public bool Restock { get; set; } = true;
+          }
+          EOF
+
+      - name: Write POS application contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Application/Sales/SalesContracts.cs <<'EOF'
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Application.Sales;
+
+          public sealed record OpenCashSessionRequest(
+              Guid StoreId,
+              decimal OpeningCash);
+
+          public sealed record CloseCashSessionRequest(
+              decimal ClosingCash);
+
+          public sealed record CheckoutItemRequest(
+              Guid ProductVariantId,
+              decimal Quantity,
+              decimal UnitPrice,
+              decimal DiscountAmount,
+              decimal TaxAmount);
+
+          public sealed record CheckoutPaymentRequest(
+              PaymentMethod Method,
+              decimal Amount,
+              string? ReferenceNumber);
+
+          public sealed record CheckoutRequest(
+              Guid StoreId,
+              Guid CashSessionId,
+              IReadOnlyCollection<CheckoutItemRequest> Items,
+              IReadOnlyCollection<CheckoutPaymentRequest> Payments,
+              string? Notes);
+
+          public sealed record ReturnItemRequest(
+              Guid SaleItemId,
+              decimal Quantity,
+              bool Restock);
+
+          public sealed record CreateReturnRequest(
+              IReadOnlyCollection<ReturnItemRequest> Items,
+              string? Reason);
+          EOF
+
+      - name: Update database context for POS
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/Outfitters.Infrastructure/Persistence/ApplicationDbContext.cs")
+          text = path.read_text()
+
+          dbset_anchor = "              public DbSet<InventoryTransaction> InventoryTransactions => Set<InventoryTransaction>();\n"
+          dbset_insert = dbset_anchor + """              public DbSet<CashSession> CashSessions => Set<CashSession>();
+              public DbSet<Sale> Sales => Set<Sale>();
+              public DbSet<SaleItem> SaleItems => Set<SaleItem>();
+              public DbSet<SalePayment> SalePayments => Set<SalePayment>();
+              public DbSet<SaleReturn> SaleReturns => Set<SaleReturn>();
+              public DbSet<SaleReturnItem> SaleReturnItems => Set<SaleReturnItem>();
+"""
+          if dbset_anchor not in text:
+              raise SystemExit("DbSet anchor not found")
+          text = text.replace(dbset_anchor, dbset_insert, 1)
+
+          model_anchor = """                  builder.Entity<InventoryTransaction>(entity =>
+                  {
+                      entity.Property(x => x.QuantityChange).HasPrecision(18, 3);
+                      entity.Property(x => x.BalanceAfter).HasPrecision(18, 3);
+                      entity.HasOne(x => x.Store)
+                          .WithMany()
+                          .HasForeignKey(x => x.StoreId)
+                          .OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.ProductVariant)
+                          .WithMany()
+                          .HasForeignKey(x => x.ProductVariantId)
+                          .OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.CreatedByUser)
+                          .WithMany()
+                          .HasForeignKey(x => x.CreatedByUserId)
+                          .OnDelete(DeleteBehavior.SetNull);
+                  });
+"""
+          pos_config = model_anchor + """
+                  builder.Entity<CashSession>(entity =>
+                  {
+                      entity.Property(x => x.OpeningCash).HasPrecision(18, 2);
+                      entity.Property(x => x.ClosingCash).HasPrecision(18, 2);
+                      entity.Property(x => x.ExpectedCash).HasPrecision(18, 2);
+                      entity.Property(x => x.CashVariance).HasPrecision(18, 2);
+                      entity.HasOne(x => x.Store)
+                          .WithMany()
+                          .HasForeignKey(x => x.StoreId)
+                          .OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.OpenedByUser)
+                          .WithMany()
+                          .HasForeignKey(x => x.OpenedByUserId)
+                          .OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.ClosedByUser)
+                          .WithMany()
+                          .HasForeignKey(x => x.ClosedByUserId)
+                          .OnDelete(DeleteBehavior.SetNull);
+                  });
+
+                  builder.Entity<Sale>(entity =>
+                  {
+                      entity.HasIndex(x => x.ReceiptNumber).IsUnique();
+                      entity.Property(x => x.ReceiptNumber).HasMaxLength(50).IsRequired();
+                      entity.Property(x => x.Subtotal).HasPrecision(18, 2);
+                      entity.Property(x => x.DiscountTotal).HasPrecision(18, 2);
+                      entity.Property(x => x.TaxTotal).HasPrecision(18, 2);
+                      entity.Property(x => x.GrandTotal).HasPrecision(18, 2);
+                      entity.Property(x => x.AmountPaid).HasPrecision(18, 2);
+                      entity.Property(x => x.ChangeDue).HasPrecision(18, 2);
+                      entity.HasOne(x => x.Store)
+                          .WithMany()
+                          .HasForeignKey(x => x.StoreId)
+                          .OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.CashSession)
+                          .WithMany(x => x.Sales)
+                          .HasForeignKey(x => x.CashSessionId)
+                          .OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.CashierUser)
+                          .WithMany()
+                          .HasForeignKey(x => x.CashierUserId)
+                          .OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<SaleItem>(entity =>
+                  {
+                      entity.Property(x => x.Quantity).HasPrecision(18, 3);
+                      entity.Property(x => x.UnitPrice).HasPrecision(18, 2);
+                      entity.Property(x => x.DiscountAmount).HasPrecision(18, 2);
+                      entity.Property(x => x.TaxAmount).HasPrecision(18, 2);
+                      entity.Property(x => x.LineTotal).HasPrecision(18, 2);
+                      entity.Property(x => x.ReturnedQuantity).HasPrecision(18, 3);
+                      entity.HasOne(x => x.Sale)
+                          .WithMany(x => x.Items)
+                          .HasForeignKey(x => x.SaleId)
+                          .OnDelete(DeleteBehavior.Cascade);
+                      entity.HasOne(x => x.ProductVariant)
+                          .WithMany()
+                          .HasForeignKey(x => x.ProductVariantId)
+                          .OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<SalePayment>(entity =>
+                  {
+                      entity.Property(x => x.Amount).HasPrecision(18, 2);
+                      entity.HasOne(x => x.Sale)
+                          .WithMany(x => x.Payments)
+                          .HasForeignKey(x => x.SaleId)
+                          .OnDelete(DeleteBehavior.Cascade);
+                  });
+
+                  builder.Entity<SaleReturn>(entity =>
+                  {
+                      entity.HasIndex(x => x.ReturnNumber).IsUnique();
+                      entity.Property(x => x.ReturnNumber).HasMaxLength(50).IsRequired();
+                      entity.Property(x => x.RefundAmount).HasPrecision(18, 2);
+                      entity.HasOne(x => x.Sale)
+                          .WithMany()
+                          .HasForeignKey(x => x.SaleId)
+                          .OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.ProcessedByUser)
+                          .WithMany()
+                          .HasForeignKey(x => x.ProcessedByUserId)
+                          .OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<SaleReturnItem>(entity =>
+                  {
+                      entity.Property(x => x.Quantity).HasPrecision(18, 3);
+                      entity.Property(x => x.RefundAmount).HasPrecision(18, 2);
+                      entity.HasOne(x => x.SaleReturn)
+                          .WithMany(x => x.Items)
+                          .HasForeignKey(x => x.SaleReturnId)
+                          .OnDelete(DeleteBehavior.Cascade);
+                      entity.HasOne(x => x.SaleItem)
+                          .WithMany()
+                          .HasForeignKey(x => x.SaleItemId)
+                          .OnDelete(DeleteBehavior.Restrict);
+                  });
+"""
+          if model_anchor not in text:
+              raise SystemExit("Model configuration anchor not found")
+          text = text.replace(model_anchor, pos_config, 1)
+          path.write_text(text)
+          PY
+
+      - name: Write cash session controller
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.API/Controllers/CashSessionsController.cs <<'EOF'
+          using System.Security.Claims;
+          using Microsoft.AspNetCore.Authorization;
+          using Microsoft.AspNetCore.Mvc;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Application.Sales;
+          using Outfitters.Domain.Entities;
+          using Outfitters.Domain.Enums;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.API.Controllers;
+
+          [ApiController]
+          [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager,Cashier")]
+          [Route("api/cash-sessions")]
+          public sealed class CashSessionsController : ControllerBase
+          {
+              private readonly ApplicationDbContext _db;
+
+              public CashSessionsController(ApplicationDbContext db) => _db = db;
+
+              [HttpPost("open")]
+              public async Task<IActionResult> Open(OpenCashSessionRequest request)
+              {
+                  if (request.OpeningCash < 0)
+                  {
+                      return BadRequest("Opening cash cannot be negative.");
+                  }
+
+                  if (!await _db.Stores.AnyAsync(x => x.Id == request.StoreId && x.IsActive))
+                  {
+                      return BadRequest("Store was not found.");
+                  }
+
+                  var userId = GetUserId();
+                  var alreadyOpen = await _db.CashSessions.AnyAsync(x =>
+                      x.StoreId == request.StoreId &&
+                      x.OpenedByUserId == userId &&
+                      x.Status == CashSessionStatus.Open);
+
+                  if (alreadyOpen)
+                  {
+                      return Conflict("This user already has an open cash session for the store.");
+                  }
+
+                  var session = new CashSession
+                  {
+                      StoreId = request.StoreId,
+                      OpenedByUserId = userId,
+                      OpeningCash = request.OpeningCash
+                  };
+
+                  _db.CashSessions.Add(session);
+                  await _db.SaveChangesAsync();
+
+                  return Ok(new
+                  {
+                      session.Id,
+                      session.StoreId,
+                      session.OpenedAtUtc,
+                      session.OpeningCash,
+                      session.Status
+                  });
+              }
+
+              [HttpPost("{id:guid}/close")]
+              public async Task<IActionResult> Close(Guid id, CloseCashSessionRequest request)
+              {
+                  var session = await _db.CashSessions
+                      .SingleOrDefaultAsync(x => x.Id == id);
+
+                  if (session is null)
+                  {
+                      return NotFound();
+                  }
+
+                  if (session.Status != CashSessionStatus.Open)
+                  {
+                      return BadRequest("Cash session is already closed.");
+                  }
+
+                  var cashSales = await _db.SalePayments
+                      .Where(x =>
+                          x.Sale.CashSessionId == id &&
+                          x.Sale.Status != SaleStatus.Voided &&
+                          x.Method == PaymentMethod.Cash)
+                      .SumAsync(x => (decimal?)x.Amount) ?? 0m;
+
+                  var expectedCash = session.OpeningCash + cashSales;
+                  session.ClosingCash = request.ClosingCash;
+                  session.ExpectedCash = expectedCash;
+                  session.CashVariance = request.ClosingCash - expectedCash;
+                  session.ClosedAtUtc = DateTime.UtcNow;
+                  session.ClosedByUserId = GetUserId();
+                  session.Status = CashSessionStatus.Closed;
+                  session.UpdatedAtUtc = DateTime.UtcNow;
+
+                  await _db.SaveChangesAsync();
+
+                  return Ok(new
+                  {
+                      session.Id,
+                      session.OpeningCash,
+                      session.ExpectedCash,
+                      session.ClosingCash,
+                      session.CashVariance,
+                      session.ClosedAtUtc
+                  });
+              }
+
+              [HttpGet("open")]
+              public async Task<IActionResult> GetOpen([FromQuery] Guid storeId)
+              {
+                  var userId = GetUserId();
+                  var sessions = await _db.CashSessions
+                      .AsNoTracking()
+                      .Where(x =>
+                          x.StoreId == storeId &&
+                          x.OpenedByUserId == userId &&
+                          x.Status == CashSessionStatus.Open)
+                      .OrderByDescending(x => x.OpenedAtUtc)
+                      .Select(x => new
+                      {
+                          x.Id,
+                          x.StoreId,
+                          x.OpenedAtUtc,
+                          x.OpeningCash,
+                          x.Status
+                      })
+                      .ToListAsync();
+
+                  return Ok(sessions);
+              }
+
+              private Guid GetUserId()
+              {
+                  var value = User.FindFirstValue(ClaimTypes.NameIdentifier);
+                  return Guid.TryParse(value, out var id)
+                      ? id
+                      : throw new UnauthorizedAccessException("User identifier is missing.");
+              }
+          }
+          EOF
+
+      - name: Write sales controller
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.API/Controllers/SalesController.cs <<'EOF'
+          using System.Globalization;
+          using System.Security.Claims;
+          using System.Text;
+          using Microsoft.AspNetCore.Authorization;
+          using Microsoft.AspNetCore.Mvc;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Application.Sales;
+          using Outfitters.Domain.Entities;
+          using Outfitters.Domain.Enums;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.API.Controllers;
+
+          [ApiController]
+          [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager,Cashier")]
+          [Route("api/sales")]
+          public sealed class SalesController : ControllerBase
+          {
+              private readonly ApplicationDbContext _db;
+
+              public SalesController(ApplicationDbContext db) => _db = db;
+
+              [HttpPost("checkout")]
+              public async Task<IActionResult> Checkout(CheckoutRequest request)
+              {
+                  if (request.Items.Count == 0)
+                  {
+                      return BadRequest("At least one sale item is required.");
+                  }
+
+                  if (request.Payments.Count == 0)
+                  {
+                      return BadRequest("At least one payment is required.");
+                  }
+
+                  var cashSession = await _db.CashSessions.SingleOrDefaultAsync(x =>
+                      x.Id == request.CashSessionId &&
+                      x.StoreId == request.StoreId &&
+                      x.Status == CashSessionStatus.Open);
+
+                  if (cashSession is null)
+                  {
+                      return BadRequest("An open cash session was not found.");
+                  }
+
+                  var cashierUserId = GetUserId();
+                  await using var transaction = await _db.Database.BeginTransactionAsync();
+
+                  var sale = new Sale
+                  {
+                      StoreId = request.StoreId,
+                      CashSessionId = request.CashSessionId,
+                      CashierUserId = cashierUserId,
+                      ReceiptNumber = await GenerateReceiptNumber(request.StoreId),
+                      Notes = request.Notes?.Trim()
+                  };
+
+                  foreach (var requestedItem in request.Items)
+                  {
+                      if (requestedItem.Quantity <= 0)
+                      {
+                          return BadRequest("Item quantity must be greater than zero.");
+                      }
+
+                      if (requestedItem.UnitPrice < 0 ||
+                          requestedItem.DiscountAmount < 0 ||
+                          requestedItem.TaxAmount < 0)
+                      {
+                          return BadRequest("Price, discount, and tax values cannot be negative.");
+                      }
+
+                      var inventory = await _db.InventoryItems
+                          .SingleOrDefaultAsync(x =>
+                              x.StoreId == request.StoreId &&
+                              x.ProductVariantId == requestedItem.ProductVariantId);
+
+                      if (inventory is null ||
+                          inventory.QuantityOnHand - inventory.ReservedQuantity < requestedItem.Quantity)
+                      {
+                          return BadRequest(
+                              $"Insufficient stock for variant {requestedItem.ProductVariantId}.");
+                      }
+
+                      var gross = requestedItem.Quantity * requestedItem.UnitPrice;
+                      var lineTotal = gross - requestedItem.DiscountAmount + requestedItem.TaxAmount;
+
+                      if (lineTotal < 0)
+                      {
+                          return BadRequest("Line total cannot be negative.");
+                      }
+
+                      sale.Items.Add(new SaleItem
+                      {
+                          ProductVariantId = requestedItem.ProductVariantId,
+                          Quantity = requestedItem.Quantity,
+                          UnitPrice = requestedItem.UnitPrice,
+                          DiscountAmount = requestedItem.DiscountAmount,
+                          TaxAmount = requestedItem.TaxAmount,
+                          LineTotal = lineTotal
+                      });
+
+                      inventory.QuantityOnHand -= requestedItem.Quantity;
+                      inventory.UpdatedAtUtc = DateTime.UtcNow;
+
+                      _db.InventoryTransactions.Add(new InventoryTransaction
+                      {
+                          StoreId = request.StoreId,
+                          ProductVariantId = requestedItem.ProductVariantId,
+                          TransactionType = InventoryTransactionType.Sale,
+                          QuantityChange = -requestedItem.Quantity,
+                          BalanceAfter = inventory.QuantityOnHand,
+                          ReferenceNumber = sale.ReceiptNumber,
+                          Remarks = "POS sale",
+                          CreatedByUserId = cashierUserId
+                      });
+                  }
+
+                  sale.Subtotal = sale.Items.Sum(x => x.Quantity * x.UnitPrice);
+                  sale.DiscountTotal = sale.Items.Sum(x => x.DiscountAmount);
+                  sale.TaxTotal = sale.Items.Sum(x => x.TaxAmount);
+                  sale.GrandTotal = sale.Items.Sum(x => x.LineTotal);
+
+                  foreach (var requestedPayment in request.Payments)
+                  {
+                      if (requestedPayment.Amount <= 0)
+                      {
+                          return BadRequest("Payment amount must be greater than zero.");
+                      }
+
+                      sale.Payments.Add(new SalePayment
+                      {
+                          Method = requestedPayment.Method,
+                          Amount = requestedPayment.Amount,
+                          ReferenceNumber = requestedPayment.ReferenceNumber?.Trim()
+                      });
+                  }
+
+                  sale.AmountPaid = sale.Payments.Sum(x => x.Amount);
+                  if (sale.AmountPaid < sale.GrandTotal)
+                  {
+                      return BadRequest("Payment total is less than the sale total.");
+                  }
+
+                  sale.ChangeDue = sale.AmountPaid - sale.GrandTotal;
+
+                  _db.Sales.Add(sale);
+                  await _db.SaveChangesAsync();
+                  await transaction.CommitAsync();
+
+                  return Ok(new
+                  {
+                      sale.Id,
+                      sale.ReceiptNumber,
+                      sale.Subtotal,
+                      sale.DiscountTotal,
+                      sale.TaxTotal,
+                      sale.GrandTotal,
+                      sale.AmountPaid,
+                      sale.ChangeDue,
+                      sale.CreatedAtUtc
+                  });
+              }
+
+              [HttpGet("{id:guid}")]
+              public async Task<IActionResult> Get(Guid id)
+              {
+                  var sale = await _db.Sales
+                      .AsNoTracking()
+                      .Where(x => x.Id == id)
+                      .Select(x => new
+                      {
+                          x.Id,
+                          x.ReceiptNumber,
+                          x.StoreId,
+                          x.CashierUserId,
+                          x.Subtotal,
+                          x.DiscountTotal,
+                          x.TaxTotal,
+                          x.GrandTotal,
+                          x.AmountPaid,
+                          x.ChangeDue,
+                          x.Status,
+                          x.CreatedAtUtc,
+                          Items = x.Items.Select(i => new
+                          {
+                              i.Id,
+                              i.ProductVariantId,
+                              i.Quantity,
+                              i.UnitPrice,
+                              i.DiscountAmount,
+                              i.TaxAmount,
+                              i.LineTotal,
+                              i.ReturnedQuantity
+                          }),
+                          Payments = x.Payments.Select(p => new
+                          {
+                              p.Method,
+                              p.Amount,
+                              p.ReferenceNumber
+                          })
+                      })
+                      .SingleOrDefaultAsync();
+
+                  return sale is null ? NotFound() : Ok(sale);
+              }
+
+              [HttpGet("{id:guid}/receipt")]
+              public async Task<IActionResult> Receipt(Guid id)
+              {
+                  var sale = await _db.Sales
+                      .AsNoTracking()
+                      .Include(x => x.Store)
+                      .Include(x => x.CashierUser)
+                      .Include(x => x.Items)
+                          .ThenInclude(x => x.ProductVariant)
+                          .ThenInclude(x => x.Product)
+                      .Include(x => x.Payments)
+                      .SingleOrDefaultAsync(x => x.Id == id);
+
+                  if (sale is null)
+                  {
+                      return NotFound();
+                  }
+
+                  var builder = new StringBuilder();
+                  builder.AppendLine("OUTFITTERS APPAREL STORE");
+                  builder.AppendLine(sale.Store.Name);
+                  builder.AppendLine($"Receipt: {sale.ReceiptNumber}");
+                  builder.AppendLine($"Date: {sale.CreatedAtUtc:yyyy-MM-dd HH:mm} UTC");
+                  builder.AppendLine($"Cashier: {sale.CashierUser.UserName}");
+                  builder.AppendLine(new string('-', 32));
+
+                  foreach (var item in sale.Items)
+                  {
+                      builder.AppendLine(item.ProductVariant.Product.Name);
+                      builder.AppendLine(
+                          $"{item.Quantity.ToString("0.###", CultureInfo.InvariantCulture)} x " +
+                          $"{item.UnitPrice.ToString("0.00", CultureInfo.InvariantCulture)} " +
+                          $"= {item.LineTotal.ToString("0.00", CultureInfo.InvariantCulture)}");
+                  }
+
+                  builder.AppendLine(new string('-', 32));
+                  builder.AppendLine($"Subtotal: {sale.Subtotal:0.00}");
+                  builder.AppendLine($"Discount: {sale.DiscountTotal:0.00}");
+                  builder.AppendLine($"Tax: {sale.TaxTotal:0.00}");
+                  builder.AppendLine($"TOTAL: {sale.GrandTotal:0.00}");
+                  builder.AppendLine($"Paid: {sale.AmountPaid:0.00}");
+                  builder.AppendLine($"Change: {sale.ChangeDue:0.00}");
+                  builder.AppendLine("Thank you for shopping!");
+
+                  return Content(builder.ToString(), "text/plain", Encoding.UTF8);
+              }
+
+              [HttpGet("daily-summary")]
+              public async Task<IActionResult> DailySummary(
+                  [FromQuery] Guid storeId,
+                  [FromQuery] DateOnly? date)
+              {
+                  var selectedDate = date ?? DateOnly.FromDateTime(DateTime.UtcNow);
+                  var start = selectedDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+                  var end = start.AddDays(1);
+
+                  var sales = _db.Sales
+                      .AsNoTracking()
+                      .Where(x =>
+                          x.StoreId == storeId &&
+                          x.CreatedAtUtc >= start &&
+                          x.CreatedAtUtc < end &&
+                          x.Status != SaleStatus.Voided);
+
+                  var result = new
+                  {
+                      Date = selectedDate,
+                      Transactions = await sales.CountAsync(),
+                      GrossSales = await sales.SumAsync(x => (decimal?)x.GrandTotal) ?? 0m,
+                      Discounts = await sales.SumAsync(x => (decimal?)x.DiscountTotal) ?? 0m,
+                      Taxes = await sales.SumAsync(x => (decimal?)x.TaxTotal) ?? 0m,
+                      UnitsSold = await sales.SelectMany(x => x.Items)
+                          .SumAsync(x => (decimal?)x.Quantity) ?? 0m
+                  };
+
+                  return Ok(result);
+              }
+
+              private Guid GetUserId()
+              {
+                  var value = User.FindFirstValue(ClaimTypes.NameIdentifier);
+                  return Guid.TryParse(value, out var id)
+                      ? id
+                      : throw new UnauthorizedAccessException("User identifier is missing.");
+              }
+
+              private async Task<string> GenerateReceiptNumber(Guid storeId)
+              {
+                  var datePart = DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+                  var countToday = await _db.Sales.CountAsync(x =>
+                      x.StoreId == storeId &&
+                      x.CreatedAtUtc.Date == DateTime.UtcNow.Date);
+
+                  return $"OR-{datePart}-{countToday + 1:00000}";
+              }
+          }
+          EOF
+
+      - name: Write returns controller
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.API/Controllers/ReturnsController.cs <<'EOF'
+          using System.Globalization;
+          using System.Security.Claims;
+          using Microsoft.AspNetCore.Authorization;
+          using Microsoft.AspNetCore.Mvc;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Application.Sales;
+          using Outfitters.Domain.Entities;
+          using Outfitters.Domain.Enums;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.API.Controllers;
+
+          [ApiController]
+          [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager")]
+          [Route("api/sales/{saleId:guid}/returns")]
+          public sealed class ReturnsController : ControllerBase
+          {
+              private readonly ApplicationDbContext _db;
+
+              public ReturnsController(ApplicationDbContext db) => _db = db;
+
+              [HttpPost]
+              public async Task<IActionResult> Create(Guid saleId, CreateReturnRequest request)
+              {
+                  if (request.Items.Count == 0)
+                  {
+                      return BadRequest("At least one return item is required.");
+                  }
+
+                  var sale = await _db.Sales
+                      .Include(x => x.Items)
+                      .SingleOrDefaultAsync(x => x.Id == saleId);
+
+                  if (sale is null)
+                  {
+                      return NotFound();
+                  }
+
+                  if (sale.Status == SaleStatus.Voided)
+                  {
+                      return BadRequest("Voided sales cannot be returned.");
+                  }
+
+                  await using var transaction = await _db.Database.BeginTransactionAsync();
+
+                  var saleReturn = new SaleReturn
+                  {
+                      SaleId = saleId,
+                      ProcessedByUserId = GetUserId(),
+                      ReturnNumber = await GenerateReturnNumber(),
+                      Reason = request.Reason?.Trim()
+                  };
+
+                  foreach (var requestedItem in request.Items)
+                  {
+                      var saleItem = sale.Items.SingleOrDefault(x => x.Id == requestedItem.SaleItemId);
+                      if (saleItem is null)
+                      {
+                          return BadRequest($"Sale item {requestedItem.SaleItemId} was not found.");
+                      }
+
+                      var remainingReturnable = saleItem.Quantity - saleItem.ReturnedQuantity;
+                      if (requestedItem.Quantity <= 0 ||
+                          requestedItem.Quantity > remainingReturnable)
+                      {
+                          return BadRequest("Return quantity is invalid.");
+                      }
+
+                      var unitRefund = saleItem.LineTotal / saleItem.Quantity;
+                      var refundAmount = decimal.Round(
+                          unitRefund * requestedItem.Quantity,
+                          2,
+                          MidpointRounding.AwayFromZero);
+
+                      saleReturn.Items.Add(new SaleReturnItem
+                      {
+                          SaleItemId = saleItem.Id,
+                          Quantity = requestedItem.Quantity,
+                          RefundAmount = refundAmount,
+                          Restock = requestedItem.Restock
+                      });
+
+                      saleItem.ReturnedQuantity += requestedItem.Quantity;
+                      saleReturn.RefundAmount += refundAmount;
+
+                      if (requestedItem.Restock)
+                      {
+                          var inventory = await _db.InventoryItems.SingleOrDefaultAsync(x =>
+                              x.StoreId == sale.StoreId &&
+                              x.ProductVariantId == saleItem.ProductVariantId);
+
+                          if (inventory is null)
+                          {
+                              inventory = new InventoryItem
+                              {
+                                  StoreId = sale.StoreId,
+                                  ProductVariantId = saleItem.ProductVariantId
+                              };
+                              _db.InventoryItems.Add(inventory);
+                          }
+
+                          inventory.QuantityOnHand += requestedItem.Quantity;
+                          inventory.UpdatedAtUtc = DateTime.UtcNow;
+
+                          _db.InventoryTransactions.Add(new InventoryTransaction
+                          {
+                              StoreId = sale.StoreId,
+                              ProductVariantId = saleItem.ProductVariantId,
+                              TransactionType = InventoryTransactionType.Return,
+                              QuantityChange = requestedItem.Quantity,
+                              BalanceAfter = inventory.QuantityOnHand,
+                              ReferenceNumber = saleReturn.ReturnNumber,
+                              Remarks = request.Reason?.Trim(),
+                              CreatedByUserId = saleReturn.ProcessedByUserId
+                          });
+                      }
+                  }
+
+                  var allReturned = sale.Items.All(x => x.ReturnedQuantity >= x.Quantity);
+                  sale.Status = allReturned
+                      ? SaleStatus.FullyReturned
+                      : SaleStatus.PartiallyReturned;
+                  sale.UpdatedAtUtc = DateTime.UtcNow;
+
+                  _db.SaleReturns.Add(saleReturn);
+                  await _db.SaveChangesAsync();
+                  await transaction.CommitAsync();
+
+                  return Ok(new
+                  {
+                      saleReturn.Id,
+                      saleReturn.ReturnNumber,
+                      saleReturn.RefundAmount,
+                      SaleStatus = sale.Status,
+                      saleReturn.CreatedAtUtc
+                  });
+              }
+
+              private Guid GetUserId()
+              {
+                  var value = User.FindFirstValue(ClaimTypes.NameIdentifier);
+                  return Guid.TryParse(value, out var id)
+                      ? id
+                      : throw new UnauthorizedAccessException("User identifier is missing.");
+              }
+
+              private async Task<string> GenerateReturnNumber()
+              {
+                  var datePart = DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+                  var countToday = await _db.SaleReturns.CountAsync(x =>
+                      x.CreatedAtUtc.Date == DateTime.UtcNow.Date);
+
+                  return $"RT-{datePart}-{countToday + 1:00000}";
+              }
+          }
+          EOF
+
+      - name: Compile before migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore OutfittersRetailManagementSystem.sln
+          dotnet build OutfittersRetailManagementSystem.sln --configuration Release --no-restore
+
+      - name: Create EF Core migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet tool install --global dotnet-ef --version 9.0.*
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          dotnet ef migrations add AddPosSalesEngine \
+            --project src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj \
+            --startup-project src/Outfitters.API/Outfitters.API.csproj \
+            --output-dir Persistence/Migrations
+
+      - name: Build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet build OutfittersRetailManagementSystem.sln --configuration Release
+          dotnet test OutfittersRetailManagementSystem.sln --configuration Release --no-build
+
+      - name: Commit milestone 4
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src tests OutfittersRetailManagementSystem.sln Directory.Build.props docker-compose.yml global.json README.md .gitignore
+          git commit -m "Milestone 4 - Add POS sales, payments, returns, and cash sessions"
+          git push
