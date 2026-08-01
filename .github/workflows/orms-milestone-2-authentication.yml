@@ -521,8 +521,6 @@ jobs:
 
           cat > src/Outfitters.API/Program.cs <<'EOF'
           using Microsoft.AspNetCore.Identity;
-          using Microsoft.EntityFrameworkCore;
-          using Microsoft.OpenApi.Models;
           using Outfitters.Domain.Entities;
           using Outfitters.Infrastructure;
           using Outfitters.Infrastructure.Persistence;
@@ -531,39 +529,7 @@ jobs:
 
           builder.Services.AddControllers();
           builder.Services.AddEndpointsApiExplorer();
-          builder.Services.AddSwaggerGen(options =>
-          {
-              options.SwaggerDoc("v1", new OpenApiInfo
-              {
-                  Title = "Outfitters Retail Management API",
-                  Version = "v1"
-              });
-
-              options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
-              {
-                  Type = SecuritySchemeType.Http,
-                  Scheme = "bearer",
-                  BearerFormat = "JWT",
-                  Name = "Authorization",
-                  In = ParameterLocation.Header
-              });
-
-              options.AddSecurityRequirement(new OpenApiSecurityRequirement
-              {
-                  {
-                      new OpenApiSecurityScheme
-                      {
-                          Reference = new OpenApiReference
-                          {
-                              Type = ReferenceType.SecurityScheme,
-                              Id = "Bearer"
-                          }
-                      },
-                      Array.Empty<string>()
-                  }
-              });
-          });
-
+          builder.Services.AddSwaggerGen();
           builder.Services.AddHealthChecks();
           builder.Services.AddInfrastructure(builder.Configuration);
 
