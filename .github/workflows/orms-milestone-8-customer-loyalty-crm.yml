@@ -262,7 +262,7 @@ jobs:
               public DbSet<CustomerVoucher> CustomerVouchers => Set<CustomerVoucher>();
               public DbSet<CustomerFavoriteProduct> CustomerFavoriteProducts => Set<CustomerFavoriteProduct>();
 
-"""
+          """
 
           if "DbSet<CustomerTier>" not in text:
               method_index = text.find("protected override void OnModelCreating")
@@ -334,7 +334,7 @@ jobs:
                       entity.HasOne(x => x.Customer).WithMany()
                           .HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.SetNull);
                   });
-"""
+          """
 
           if "builder.Entity<CustomerTier>" not in text:
               method_match = re.search(
