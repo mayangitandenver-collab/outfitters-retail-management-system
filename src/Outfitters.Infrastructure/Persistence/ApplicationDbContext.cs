@@ -20,6 +20,12 @@ public sealed class ApplicationDbContext
     public DbSet<ProductVariant> ProductVariants => Set<ProductVariant>();
     public DbSet<InventoryItem> InventoryItems => Set<InventoryItem>();
     public DbSet<InventoryTransaction> InventoryTransactions => Set<InventoryTransaction>();
+    public DbSet<CashSession> CashSessions => Set<CashSession>();
+    public DbSet<Sale> Sales => Set<Sale>();
+    public DbSet<SaleItem> SaleItems => Set<SaleItem>();
+    public DbSet<SalePayment> SalePayments => Set<SalePayment>();
+    public DbSet<SaleReturn> SaleReturns => Set<SaleReturn>();
+    public DbSet<SaleReturnItem> SaleReturnItems => Set<SaleReturnItem>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -133,6 +139,106 @@ public sealed class ApplicationDbContext
                 .WithMany()
                 .HasForeignKey(x => x.CreatedByUserId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        builder.Entity<CashSession>(entity =>
+        {
+            entity.Property(x => x.OpeningCash).HasPrecision(18, 2);
+            entity.Property(x => x.ClosingCash).HasPrecision(18, 2);
+            entity.Property(x => x.ExpectedCash).HasPrecision(18, 2);
+            entity.Property(x => x.CashVariance).HasPrecision(18, 2);
+            entity.HasOne(x => x.Store)
+                .WithMany()
+                .HasForeignKey(x => x.StoreId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.OpenedByUser)
+                .WithMany()
+                .HasForeignKey(x => x.OpenedByUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.ClosedByUser)
+                .WithMany()
+                .HasForeignKey(x => x.ClosedByUserId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        builder.Entity<Sale>(entity =>
+        {
+            entity.HasIndex(x => x.ReceiptNumber).IsUnique();
+            entity.Property(x => x.ReceiptNumber).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.Subtotal).HasPrecision(18, 2);
+            entity.Property(x => x.DiscountTotal).HasPrecision(18, 2);
+            entity.Property(x => x.TaxTotal).HasPrecision(18, 2);
+            entity.Property(x => x.GrandTotal).HasPrecision(18, 2);
+            entity.Property(x => x.AmountPaid).HasPrecision(18, 2);
+            entity.Property(x => x.ChangeDue).HasPrecision(18, 2);
+            entity.HasOne(x => x.Store)
+                .WithMany()
+                .HasForeignKey(x => x.StoreId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.CashSession)
+                .WithMany(x => x.Sales)
+                .HasForeignKey(x => x.CashSessionId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.CashierUser)
+                .WithMany()
+                .HasForeignKey(x => x.CashierUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<SaleItem>(entity =>
+        {
+            entity.Property(x => x.Quantity).HasPrecision(18, 3);
+            entity.Property(x => x.UnitPrice).HasPrecision(18, 2);
+            entity.Property(x => x.DiscountAmount).HasPrecision(18, 2);
+            entity.Property(x => x.TaxAmount).HasPrecision(18, 2);
+            entity.Property(x => x.LineTotal).HasPrecision(18, 2);
+            entity.Property(x => x.ReturnedQuantity).HasPrecision(18, 3);
+            entity.HasOne(x => x.Sale)
+                .WithMany(x => x.Items)
+                .HasForeignKey(x => x.SaleId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.ProductVariant)
+                .WithMany()
+                .HasForeignKey(x => x.ProductVariantId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<SalePayment>(entity =>
+        {
+            entity.Property(x => x.Amount).HasPrecision(18, 2);
+            entity.HasOne(x => x.Sale)
+                .WithMany(x => x.Payments)
+                .HasForeignKey(x => x.SaleId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<SaleReturn>(entity =>
+        {
+            entity.HasIndex(x => x.ReturnNumber).IsUnique();
+            entity.Property(x => x.ReturnNumber).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.RefundAmount).HasPrecision(18, 2);
+            entity.HasOne(x => x.Sale)
+                .WithMany()
+                .HasForeignKey(x => x.SaleId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.ProcessedByUser)
+                .WithMany()
+                .HasForeignKey(x => x.ProcessedByUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<SaleReturnItem>(entity =>
+        {
+            entity.Property(x => x.Quantity).HasPrecision(18, 3);
+            entity.Property(x => x.RefundAmount).HasPrecision(18, 2);
+            entity.HasOne(x => x.SaleReturn)
+                .WithMany(x => x.Items)
+                .HasForeignKey(x => x.SaleReturnId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.SaleItem)
+                .WithMany()
+                .HasForeignKey(x => x.SaleItemId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
     }
 }
