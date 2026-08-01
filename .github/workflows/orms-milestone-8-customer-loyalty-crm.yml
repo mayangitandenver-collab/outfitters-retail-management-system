@@ -214,18 +214,33 @@ jobs:
 
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           sale_path = Path("src/Outfitters.Domain/Entities/Sale.cs")
           sale_text = sale_path.read_text()
 
-          anchor = "              public Guid CashierUserId { get; set; }\n"
-          insert = """              public Guid? CustomerId { get; set; }
+          if "public Guid? CustomerId" not in sale_text:
+              class_match = re.search(
+                  r"(public\s+sealed\s+class\s+Sale\b[^{]*\{)",
+                  sale_text
+              )
+              if not class_match:
+                  raise SystemExit("Sale class declaration not found")
+
+              closing_index = sale_text.rfind("}")
+              if closing_index == -1 or closing_index <= class_match.end():
+                  raise SystemExit("Sale class closing brace not found")
+
+              customer_properties = """
+              public Guid? CustomerId { get; set; }
               public Customer? Customer { get; set; }
           """
-          if "public Guid? CustomerId" not in sale_text:
-              if anchor not in sale_text:
-                  raise SystemExit("Sale customer anchor not found")
-              sale_text = sale_text.replace(anchor, insert + anchor, 1)
+
+              sale_text = (
+                  sale_text[:closing_index]
+                  + customer_properties
+                  + sale_text[closing_index:]
+              )
               sale_path.write_text(sale_text)
           PY
 
