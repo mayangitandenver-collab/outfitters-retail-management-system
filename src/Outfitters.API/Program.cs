@@ -1,16 +1,15 @@
-using Microsoft.EntityFrameworkCore;
-using Outfitters.Application;
+using Microsoft.AspNetCore.Identity;
+using Outfitters.Domain.Entities;
 using Outfitters.Infrastructure;
 using Outfitters.Infrastructure.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddApplication();
-builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
-builder.Services.AddHealthChecks()
-    .AddDbContextCheck<ApplicationDbContext>("postgresql");
+builder.Services.AddHealthChecks();
+builder.Services.AddInfrastructure(builder.Configuration);
 
 var app = builder.Build();
 
@@ -20,19 +19,21 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.MapGet("/", () => Results.Ok(new
-{
-    service = "Outfitters Retail Management System API",
-    status = "running",
-    version = "0.1.0"
-}))
-.WithName("GetApiStatus")
-.WithOpenApi();
+app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
 
+app.MapControllers();
 app.MapHealthChecks("/health");
+
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+    var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+    var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<ApplicationRole>>();
+    await DatabaseSeeder.SeedAsync(db, userManager, roleManager);
+}
 
 app.Run();
 
-public partial class Program
-{
-}
+public partial class Program;
