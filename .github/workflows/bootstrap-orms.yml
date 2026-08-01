@@ -51,6 +51,8 @@ jobs:
             src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj
           dotnet add tests/Outfitters.Tests/Outfitters.Tests.csproj reference src/Outfitters.Domain/Outfitters.Domain.csproj
 
+          dotnet add src/Outfitters.Application/Outfitters.Application.csproj package Microsoft.Extensions.DependencyInjection.Abstractions --version 9.0.*
+
           dotnet add src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj package Microsoft.EntityFrameworkCore --version 9.0.*
           dotnet add src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj package Npgsql.EntityFrameworkCore.PostgreSQL --version 9.0.*
           dotnet add src/Outfitters.API/Outfitters.API.csproj package Swashbuckle.AspNetCore
