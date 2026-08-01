@@ -33,6 +33,10 @@ public sealed class ApplicationDbContext
     public DbSet<GoodsReceiptItem> GoodsReceiptItems => Set<GoodsReceiptItem>();
     public DbSet<SupplierReturn> SupplierReturns => Set<SupplierReturn>();
     public DbSet<SupplierReturnItem> SupplierReturnItems => Set<SupplierReturnItem>();
+    public DbSet<StockTransfer> StockTransfers => Set<StockTransfer>();
+    public DbSet<StockTransferItem> StockTransferItems => Set<StockTransferItem>();
+    public DbSet<StockTransferReceipt> StockTransferReceipts => Set<StockTransferReceipt>();
+    public DbSet<StockTransferReceiptItem> StockTransferReceiptItems => Set<StockTransferReceiptItem>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -285,6 +289,57 @@ public sealed class ApplicationDbContext
             entity.Property(x => x.LineTotal).HasPrecision(18, 2);
             entity.HasOne(x => x.SupplierReturn).WithMany(x => x.Items)
                 .HasForeignKey(x => x.SupplierReturnId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.ProductVariant).WithMany()
+                .HasForeignKey(x => x.ProductVariantId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<StockTransfer>(entity =>
+        {
+            entity.HasIndex(x => x.TransferNumber).IsUnique();
+            entity.Property(x => x.TransferNumber).HasMaxLength(50).IsRequired();
+            entity.HasOne(x => x.SourceStore).WithMany()
+                .HasForeignKey(x => x.SourceStoreId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.DestinationStore).WithMany()
+                .HasForeignKey(x => x.DestinationStoreId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.CreatedByUser).WithMany()
+                .HasForeignKey(x => x.CreatedByUserId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.DispatchedByUser).WithMany()
+                .HasForeignKey(x => x.DispatchedByUserId).OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(x => x.ReceivedByUser).WithMany()
+                .HasForeignKey(x => x.ReceivedByUserId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        builder.Entity<StockTransferItem>(entity =>
+        {
+            entity.HasIndex(x => new { x.StockTransferId, x.ProductVariantId }).IsUnique();
+            entity.Property(x => x.RequestedQuantity).HasPrecision(18, 3);
+            entity.Property(x => x.DispatchedQuantity).HasPrecision(18, 3);
+            entity.Property(x => x.ReceivedQuantity).HasPrecision(18, 3);
+            entity.Property(x => x.DamagedQuantity).HasPrecision(18, 3);
+            entity.HasOne(x => x.StockTransfer).WithMany(x => x.Items)
+                .HasForeignKey(x => x.StockTransferId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.ProductVariant).WithMany()
+                .HasForeignKey(x => x.ProductVariantId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<StockTransferReceipt>(entity =>
+        {
+            entity.HasIndex(x => x.ReceiptNumber).IsUnique();
+            entity.Property(x => x.ReceiptNumber).HasMaxLength(50).IsRequired();
+            entity.HasOne(x => x.StockTransfer).WithMany(x => x.Receipts)
+                .HasForeignKey(x => x.StockTransferId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.ReceivedByUser).WithMany()
+                .HasForeignKey(x => x.ReceivedByUserId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<StockTransferReceiptItem>(entity =>
+        {
+            entity.Property(x => x.QuantityReceived).HasPrecision(18, 3);
+            entity.Property(x => x.QuantityDamaged).HasPrecision(18, 3);
+            entity.HasOne(x => x.StockTransferReceipt).WithMany(x => x.Items)
+                .HasForeignKey(x => x.StockTransferReceiptId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.StockTransferItem).WithMany()
+                .HasForeignKey(x => x.StockTransferItemId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(x => x.ProductVariant).WithMany()
                 .HasForeignKey(x => x.ProductVariantId).OnDelete(DeleteBehavior.Restrict);
         });
