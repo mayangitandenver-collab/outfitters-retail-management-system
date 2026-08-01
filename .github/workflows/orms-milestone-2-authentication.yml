@@ -609,51 +609,12 @@ jobs:
           dotnet build OutfittersRetailManagementSystem.sln --configuration Release --no-restore
           dotnet test OutfittersRetailManagementSystem.sln --configuration Release --no-build
 
-      - name: Replace CI workflow
-        shell: bash
-        run: |
-          cat > .github/workflows/dotnet-ci.yml <<'EOF'
-          name: Build and Test
-
-          on:
-            push:
-              branches: [main]
-            pull_request:
-              branches: [main]
-            workflow_dispatch:
-
-          permissions:
-            contents: read
-
-          jobs:
-            build:
-              runs-on: ubuntu-latest
-
-              steps:
-                - name: Check out repository
-                  uses: actions/checkout@v4
-
-                - name: Set up .NET 9
-                  uses: actions/setup-dotnet@v4
-                  with:
-                    dotnet-version: 9.0.x
-
-                - name: Restore
-                  run: dotnet restore OutfittersRetailManagementSystem.sln
-
-                - name: Build
-                  run: dotnet build OutfittersRetailManagementSystem.sln --configuration Release --no-restore
-
-                - name: Test
-                  run: dotnet test OutfittersRetailManagementSystem.sln --configuration Release --no-build
-          EOF
-
       - name: Commit milestone 2
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .
+          git add src tests OutfittersRetailManagementSystem.sln Directory.Build.props docker-compose.yml global.json README.md .gitignore
           git commit -m "Milestone 2 - Add authentication, identity, stores, and JWT"
           git push
