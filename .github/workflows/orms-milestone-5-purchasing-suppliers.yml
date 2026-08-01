@@ -1,0 +1,1078 @@
+name: ORMS Milestone 5 - Purchasing and Suppliers
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  milestone5:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Write purchasing domain model
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p src/Outfitters.Domain/Entities
+          mkdir -p src/Outfitters.Domain/Enums
+          mkdir -p src/Outfitters.Application/Purchasing
+          mkdir -p src/Outfitters.API/Controllers
+
+          cat > src/Outfitters.Domain/Enums/PurchaseOrderStatus.cs <<'EOF'
+          namespace Outfitters.Domain.Enums;
+
+          public enum PurchaseOrderStatus
+          {
+              Draft = 1,
+              Submitted = 2,
+              PartiallyReceived = 3,
+              FullyReceived = 4,
+              Cancelled = 5
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Enums/SupplierReturnStatus.cs <<'EOF'
+          namespace Outfitters.Domain.Enums;
+
+          public enum SupplierReturnStatus
+          {
+              Draft = 1,
+              Completed = 2,
+              Cancelled = 3
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/Supplier.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class Supplier : BaseEntity
+          {
+              public string Code { get; set; } = string.Empty;
+              public string Name { get; set; } = string.Empty;
+              public string? ContactPerson { get; set; }
+              public string? Phone { get; set; }
+              public string? Email { get; set; }
+              public string? Address { get; set; }
+              public string? TaxIdentificationNumber { get; set; }
+              public int PaymentTermsDays { get; set; }
+              public bool IsActive { get; set; } = true;
+              public ICollection<PurchaseOrder> PurchaseOrders { get; set; } = new List<PurchaseOrder>();
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/PurchaseOrder.cs <<'EOF'
+          using Outfitters.Domain.Common;
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class PurchaseOrder : BaseEntity
+          {
+              public string PurchaseOrderNumber { get; set; } = string.Empty;
+              public Guid SupplierId { get; set; }
+              public Supplier Supplier { get; set; } = null!;
+              public Guid StoreId { get; set; }
+              public Store Store { get; set; } = null!;
+              public Guid CreatedByUserId { get; set; }
+              public ApplicationUser CreatedByUser { get; set; } = null!;
+              public DateTime OrderDateUtc { get; set; } = DateTime.UtcNow;
+              public DateTime? ExpectedDeliveryDateUtc { get; set; }
+              public PurchaseOrderStatus Status { get; set; } = PurchaseOrderStatus.Draft;
+              public decimal Subtotal { get; set; }
+              public decimal DiscountTotal { get; set; }
+              public decimal TaxTotal { get; set; }
+              public decimal GrandTotal { get; set; }
+              public string? Notes { get; set; }
+              public ICollection<PurchaseOrderItem> Items { get; set; } = new List<PurchaseOrderItem>();
+              public ICollection<GoodsReceipt> GoodsReceipts { get; set; } = new List<GoodsReceipt>();
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/PurchaseOrderItem.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class PurchaseOrderItem : BaseEntity
+          {
+              public Guid PurchaseOrderId { get; set; }
+              public PurchaseOrder PurchaseOrder { get; set; } = null!;
+              public Guid ProductVariantId { get; set; }
+              public ProductVariant ProductVariant { get; set; } = null!;
+              public decimal OrderedQuantity { get; set; }
+              public decimal ReceivedQuantity { get; set; }
+              public decimal UnitCost { get; set; }
+              public decimal DiscountAmount { get; set; }
+              public decimal TaxAmount { get; set; }
+              public decimal LineTotal { get; set; }
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/GoodsReceipt.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class GoodsReceipt : BaseEntity
+          {
+              public string ReceiptNumber { get; set; } = string.Empty;
+              public Guid PurchaseOrderId { get; set; }
+              public PurchaseOrder PurchaseOrder { get; set; } = null!;
+              public Guid StoreId { get; set; }
+              public Store Store { get; set; } = null!;
+              public Guid ReceivedByUserId { get; set; }
+              public ApplicationUser ReceivedByUser { get; set; } = null!;
+              public DateTime ReceivedAtUtc { get; set; } = DateTime.UtcNow;
+              public string? SupplierInvoiceNumber { get; set; }
+              public string? Notes { get; set; }
+              public ICollection<GoodsReceiptItem> Items { get; set; } = new List<GoodsReceiptItem>();
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/GoodsReceiptItem.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class GoodsReceiptItem : BaseEntity
+          {
+              public Guid GoodsReceiptId { get; set; }
+              public GoodsReceipt GoodsReceipt { get; set; } = null!;
+              public Guid PurchaseOrderItemId { get; set; }
+              public PurchaseOrderItem PurchaseOrderItem { get; set; } = null!;
+              public Guid ProductVariantId { get; set; }
+              public ProductVariant ProductVariant { get; set; } = null!;
+              public decimal QuantityReceived { get; set; }
+              public decimal UnitCost { get; set; }
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/SupplierReturn.cs <<'EOF'
+          using Outfitters.Domain.Common;
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class SupplierReturn : BaseEntity
+          {
+              public string ReturnNumber { get; set; } = string.Empty;
+              public Guid SupplierId { get; set; }
+              public Supplier Supplier { get; set; } = null!;
+              public Guid StoreId { get; set; }
+              public Store Store { get; set; } = null!;
+              public Guid ProcessedByUserId { get; set; }
+              public ApplicationUser ProcessedByUser { get; set; } = null!;
+              public DateTime ReturnDateUtc { get; set; } = DateTime.UtcNow;
+              public SupplierReturnStatus Status { get; set; } = SupplierReturnStatus.Completed;
+              public decimal TotalCost { get; set; }
+              public string? Reason { get; set; }
+              public ICollection<SupplierReturnItem> Items { get; set; } = new List<SupplierReturnItem>();
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/SupplierReturnItem.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class SupplierReturnItem : BaseEntity
+          {
+              public Guid SupplierReturnId { get; set; }
+              public SupplierReturn SupplierReturn { get; set; } = null!;
+              public Guid ProductVariantId { get; set; }
+              public ProductVariant ProductVariant { get; set; } = null!;
+              public decimal Quantity { get; set; }
+              public decimal UnitCost { get; set; }
+              public decimal LineTotal { get; set; }
+          }
+          EOF
+
+      - name: Write purchasing contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Application/Purchasing/PurchasingContracts.cs <<'EOF'
+          namespace Outfitters.Application.Purchasing;
+
+          public sealed record CreateSupplierRequest(
+              string Code,
+              string Name,
+              string? ContactPerson,
+              string? Phone,
+              string? Email,
+              string? Address,
+              string? TaxIdentificationNumber,
+              int PaymentTermsDays);
+
+          public sealed record PurchaseOrderItemRequest(
+              Guid ProductVariantId,
+              decimal OrderedQuantity,
+              decimal UnitCost,
+              decimal DiscountAmount,
+              decimal TaxAmount);
+
+          public sealed record CreatePurchaseOrderRequest(
+              Guid SupplierId,
+              Guid StoreId,
+              DateTime? ExpectedDeliveryDateUtc,
+              string? Notes,
+              IReadOnlyCollection<PurchaseOrderItemRequest> Items);
+
+          public sealed record ReceivePurchaseOrderItemRequest(
+              Guid PurchaseOrderItemId,
+              decimal QuantityReceived,
+              decimal UnitCost);
+
+          public sealed record ReceivePurchaseOrderRequest(
+              string? SupplierInvoiceNumber,
+              string? Notes,
+              IReadOnlyCollection<ReceivePurchaseOrderItemRequest> Items);
+
+          public sealed record SupplierReturnItemRequest(
+              Guid ProductVariantId,
+              decimal Quantity,
+              decimal UnitCost);
+
+          public sealed record CreateSupplierReturnRequest(
+              Guid SupplierId,
+              Guid StoreId,
+              string? Reason,
+              IReadOnlyCollection<SupplierReturnItemRequest> Items);
+          EOF
+
+      - name: Replace database context with purchasing model
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Infrastructure/Persistence/ApplicationDbContext.cs <<'EOF'
+          using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Domain.Entities;
+
+          namespace Outfitters.Infrastructure.Persistence;
+
+          public sealed class ApplicationDbContext
+              : IdentityDbContext<ApplicationUser, ApplicationRole, Guid>
+          {
+              public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
+                  : base(options)
+              {
+              }
+
+              public DbSet<Company> Companies => Set<Company>();
+              public DbSet<Store> Stores => Set<Store>();
+              public DbSet<Category> Categories => Set<Category>();
+              public DbSet<Brand> Brands => Set<Brand>();
+              public DbSet<Product> Products => Set<Product>();
+              public DbSet<ProductVariant> ProductVariants => Set<ProductVariant>();
+              public DbSet<InventoryItem> InventoryItems => Set<InventoryItem>();
+              public DbSet<InventoryTransaction> InventoryTransactions => Set<InventoryTransaction>();
+              public DbSet<CashSession> CashSessions => Set<CashSession>();
+              public DbSet<Sale> Sales => Set<Sale>();
+              public DbSet<SaleItem> SaleItems => Set<SaleItem>();
+              public DbSet<SalePayment> SalePayments => Set<SalePayment>();
+              public DbSet<SaleReturn> SaleReturns => Set<SaleReturn>();
+              public DbSet<SaleReturnItem> SaleReturnItems => Set<SaleReturnItem>();
+              public DbSet<Supplier> Suppliers => Set<Supplier>();
+              public DbSet<PurchaseOrder> PurchaseOrders => Set<PurchaseOrder>();
+              public DbSet<PurchaseOrderItem> PurchaseOrderItems => Set<PurchaseOrderItem>();
+              public DbSet<GoodsReceipt> GoodsReceipts => Set<GoodsReceipt>();
+              public DbSet<GoodsReceiptItem> GoodsReceiptItems => Set<GoodsReceiptItem>();
+              public DbSet<SupplierReturn> SupplierReturns => Set<SupplierReturn>();
+              public DbSet<SupplierReturnItem> SupplierReturnItems => Set<SupplierReturnItem>();
+
+              protected override void OnModelCreating(ModelBuilder builder)
+              {
+                  base.OnModelCreating(builder);
+
+                  builder.Entity<Company>(entity =>
+                  {
+                      entity.HasIndex(x => x.Code).IsUnique();
+                      entity.Property(x => x.Code).HasMaxLength(30).IsRequired();
+                      entity.Property(x => x.Name).HasMaxLength(200).IsRequired();
+                  });
+
+                  builder.Entity<Store>(entity =>
+                  {
+                      entity.HasIndex(x => new { x.CompanyId, x.Code }).IsUnique();
+                      entity.Property(x => x.Code).HasMaxLength(30).IsRequired();
+                      entity.Property(x => x.Name).HasMaxLength(200).IsRequired();
+                      entity.HasOne(x => x.Company).WithMany(x => x.Stores)
+                          .HasForeignKey(x => x.CompanyId).OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<ApplicationUser>(entity =>
+                  {
+                      entity.Property(x => x.FirstName).HasMaxLength(100).IsRequired();
+                      entity.Property(x => x.LastName).HasMaxLength(100).IsRequired();
+                      entity.HasOne(x => x.Store).WithMany()
+                          .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.SetNull);
+                  });
+
+                  builder.Entity<Category>(entity =>
+                  {
+                      entity.HasIndex(x => x.Name);
+                      entity.Property(x => x.Name).HasMaxLength(150).IsRequired();
+                      entity.HasOne(x => x.ParentCategory).WithMany(x => x.Children)
+                          .HasForeignKey(x => x.ParentCategoryId).OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<Brand>(entity =>
+                  {
+                      entity.HasIndex(x => x.Name).IsUnique();
+                      entity.Property(x => x.Name).HasMaxLength(150).IsRequired();
+                  });
+
+                  builder.Entity<Product>(entity =>
+                  {
+                      entity.HasIndex(x => x.Sku).IsUnique();
+                      entity.Property(x => x.Sku).HasMaxLength(80).IsRequired();
+                      entity.Property(x => x.Name).HasMaxLength(200).IsRequired();
+                      entity.HasOne(x => x.Category).WithMany(x => x.Products)
+                          .HasForeignKey(x => x.CategoryId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.Brand).WithMany(x => x.Products)
+                          .HasForeignKey(x => x.BrandId).OnDelete(DeleteBehavior.SetNull);
+                  });
+
+                  builder.Entity<ProductVariant>(entity =>
+                  {
+                      entity.HasIndex(x => x.VariantSku).IsUnique();
+                      entity.HasIndex(x => x.Barcode).IsUnique();
+                      entity.Property(x => x.VariantSku).HasMaxLength(100).IsRequired();
+                      entity.Property(x => x.Barcode).HasMaxLength(100).IsRequired();
+                      entity.Property(x => x.CostPrice).HasPrecision(18, 2);
+                      entity.Property(x => x.SellingPrice).HasPrecision(18, 2);
+                      entity.HasOne(x => x.Product).WithMany(x => x.Variants)
+                          .HasForeignKey(x => x.ProductId).OnDelete(DeleteBehavior.Cascade);
+                  });
+
+                  builder.Entity<InventoryItem>(entity =>
+                  {
+                      entity.HasIndex(x => new { x.StoreId, x.ProductVariantId }).IsUnique();
+                      entity.Property(x => x.QuantityOnHand).HasPrecision(18, 3);
+                      entity.Property(x => x.ReservedQuantity).HasPrecision(18, 3);
+                      entity.Property(x => x.ReorderPoint).HasPrecision(18, 3);
+                      entity.Property(x => x.MinimumStock).HasPrecision(18, 3);
+                      entity.Property(x => x.MaximumStock).HasPrecision(18, 3);
+                      entity.HasOne(x => x.Store).WithMany()
+                          .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.ProductVariant).WithMany(x => x.InventoryItems)
+                          .HasForeignKey(x => x.ProductVariantId).OnDelete(DeleteBehavior.Restrict);
+                      entity.Ignore(x => x.AvailableQuantity);
+                  });
+
+                  builder.Entity<InventoryTransaction>(entity =>
+                  {
+                      entity.Property(x => x.QuantityChange).HasPrecision(18, 3);
+                      entity.Property(x => x.BalanceAfter).HasPrecision(18, 3);
+                      entity.HasOne(x => x.Store).WithMany()
+                          .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.ProductVariant).WithMany()
+                          .HasForeignKey(x => x.ProductVariantId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.CreatedByUser).WithMany()
+                          .HasForeignKey(x => x.CreatedByUserId).OnDelete(DeleteBehavior.SetNull);
+                  });
+
+                  builder.Entity<CashSession>(entity =>
+                  {
+                      entity.Property(x => x.OpeningCash).HasPrecision(18, 2);
+                      entity.Property(x => x.ClosingCash).HasPrecision(18, 2);
+                      entity.Property(x => x.ExpectedCash).HasPrecision(18, 2);
+                      entity.Property(x => x.CashVariance).HasPrecision(18, 2);
+                      entity.HasOne(x => x.Store).WithMany()
+                          .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.OpenedByUser).WithMany()
+                          .HasForeignKey(x => x.OpenedByUserId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.ClosedByUser).WithMany()
+                          .HasForeignKey(x => x.ClosedByUserId).OnDelete(DeleteBehavior.SetNull);
+                  });
+
+                  builder.Entity<Sale>(entity =>
+                  {
+                      entity.HasIndex(x => x.ReceiptNumber).IsUnique();
+                      entity.Property(x => x.ReceiptNumber).HasMaxLength(50).IsRequired();
+                      entity.Property(x => x.Subtotal).HasPrecision(18, 2);
+                      entity.Property(x => x.DiscountTotal).HasPrecision(18, 2);
+                      entity.Property(x => x.TaxTotal).HasPrecision(18, 2);
+                      entity.Property(x => x.GrandTotal).HasPrecision(18, 2);
+                      entity.Property(x => x.AmountPaid).HasPrecision(18, 2);
+                      entity.Property(x => x.ChangeDue).HasPrecision(18, 2);
+                      entity.HasOne(x => x.Store).WithMany()
+                          .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.CashSession).WithMany(x => x.Sales)
+                          .HasForeignKey(x => x.CashSessionId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.CashierUser).WithMany()
+                          .HasForeignKey(x => x.CashierUserId).OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<SaleItem>(entity =>
+                  {
+                      entity.Property(x => x.Quantity).HasPrecision(18, 3);
+                      entity.Property(x => x.UnitPrice).HasPrecision(18, 2);
+                      entity.Property(x => x.DiscountAmount).HasPrecision(18, 2);
+                      entity.Property(x => x.TaxAmount).HasPrecision(18, 2);
+                      entity.Property(x => x.LineTotal).HasPrecision(18, 2);
+                      entity.Property(x => x.ReturnedQuantity).HasPrecision(18, 3);
+                      entity.HasOne(x => x.Sale).WithMany(x => x.Items)
+                          .HasForeignKey(x => x.SaleId).OnDelete(DeleteBehavior.Cascade);
+                      entity.HasOne(x => x.ProductVariant).WithMany()
+                          .HasForeignKey(x => x.ProductVariantId).OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<SalePayment>(entity =>
+                  {
+                      entity.Property(x => x.Amount).HasPrecision(18, 2);
+                      entity.HasOne(x => x.Sale).WithMany(x => x.Payments)
+                          .HasForeignKey(x => x.SaleId).OnDelete(DeleteBehavior.Cascade);
+                  });
+
+                  builder.Entity<SaleReturn>(entity =>
+                  {
+                      entity.HasIndex(x => x.ReturnNumber).IsUnique();
+                      entity.Property(x => x.ReturnNumber).HasMaxLength(50).IsRequired();
+                      entity.Property(x => x.RefundAmount).HasPrecision(18, 2);
+                      entity.HasOne(x => x.Sale).WithMany()
+                          .HasForeignKey(x => x.SaleId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.ProcessedByUser).WithMany()
+                          .HasForeignKey(x => x.ProcessedByUserId).OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<SaleReturnItem>(entity =>
+                  {
+                      entity.Property(x => x.Quantity).HasPrecision(18, 3);
+                      entity.Property(x => x.RefundAmount).HasPrecision(18, 2);
+                      entity.HasOne(x => x.SaleReturn).WithMany(x => x.Items)
+                          .HasForeignKey(x => x.SaleReturnId).OnDelete(DeleteBehavior.Cascade);
+                      entity.HasOne(x => x.SaleItem).WithMany()
+                          .HasForeignKey(x => x.SaleItemId).OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<Supplier>(entity =>
+                  {
+                      entity.HasIndex(x => x.Code).IsUnique();
+                      entity.HasIndex(x => x.Name);
+                      entity.Property(x => x.Code).HasMaxLength(50).IsRequired();
+                      entity.Property(x => x.Name).HasMaxLength(200).IsRequired();
+                      entity.Property(x => x.Email).HasMaxLength(250);
+                      entity.Property(x => x.Phone).HasMaxLength(50);
+                  });
+
+                  builder.Entity<PurchaseOrder>(entity =>
+                  {
+                      entity.HasIndex(x => x.PurchaseOrderNumber).IsUnique();
+                      entity.Property(x => x.PurchaseOrderNumber).HasMaxLength(50).IsRequired();
+                      entity.Property(x => x.Subtotal).HasPrecision(18, 2);
+                      entity.Property(x => x.DiscountTotal).HasPrecision(18, 2);
+                      entity.Property(x => x.TaxTotal).HasPrecision(18, 2);
+                      entity.Property(x => x.GrandTotal).HasPrecision(18, 2);
+                      entity.HasOne(x => x.Supplier).WithMany(x => x.PurchaseOrders)
+                          .HasForeignKey(x => x.SupplierId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.Store).WithMany()
+                          .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.CreatedByUser).WithMany()
+                          .HasForeignKey(x => x.CreatedByUserId).OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<PurchaseOrderItem>(entity =>
+                  {
+                      entity.HasIndex(x => new { x.PurchaseOrderId, x.ProductVariantId }).IsUnique();
+                      entity.Property(x => x.OrderedQuantity).HasPrecision(18, 3);
+                      entity.Property(x => x.ReceivedQuantity).HasPrecision(18, 3);
+                      entity.Property(x => x.UnitCost).HasPrecision(18, 2);
+                      entity.Property(x => x.DiscountAmount).HasPrecision(18, 2);
+                      entity.Property(x => x.TaxAmount).HasPrecision(18, 2);
+                      entity.Property(x => x.LineTotal).HasPrecision(18, 2);
+                      entity.HasOne(x => x.PurchaseOrder).WithMany(x => x.Items)
+                          .HasForeignKey(x => x.PurchaseOrderId).OnDelete(DeleteBehavior.Cascade);
+                      entity.HasOne(x => x.ProductVariant).WithMany()
+                          .HasForeignKey(x => x.ProductVariantId).OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<GoodsReceipt>(entity =>
+                  {
+                      entity.HasIndex(x => x.ReceiptNumber).IsUnique();
+                      entity.Property(x => x.ReceiptNumber).HasMaxLength(50).IsRequired();
+                      entity.HasOne(x => x.PurchaseOrder).WithMany(x => x.GoodsReceipts)
+                          .HasForeignKey(x => x.PurchaseOrderId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.Store).WithMany()
+                          .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.ReceivedByUser).WithMany()
+                          .HasForeignKey(x => x.ReceivedByUserId).OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<GoodsReceiptItem>(entity =>
+                  {
+                      entity.Property(x => x.QuantityReceived).HasPrecision(18, 3);
+                      entity.Property(x => x.UnitCost).HasPrecision(18, 2);
+                      entity.HasOne(x => x.GoodsReceipt).WithMany(x => x.Items)
+                          .HasForeignKey(x => x.GoodsReceiptId).OnDelete(DeleteBehavior.Cascade);
+                      entity.HasOne(x => x.PurchaseOrderItem).WithMany()
+                          .HasForeignKey(x => x.PurchaseOrderItemId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.ProductVariant).WithMany()
+                          .HasForeignKey(x => x.ProductVariantId).OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<SupplierReturn>(entity =>
+                  {
+                      entity.HasIndex(x => x.ReturnNumber).IsUnique();
+                      entity.Property(x => x.ReturnNumber).HasMaxLength(50).IsRequired();
+                      entity.Property(x => x.TotalCost).HasPrecision(18, 2);
+                      entity.HasOne(x => x.Supplier).WithMany()
+                          .HasForeignKey(x => x.SupplierId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.Store).WithMany()
+                          .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.ProcessedByUser).WithMany()
+                          .HasForeignKey(x => x.ProcessedByUserId).OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<SupplierReturnItem>(entity =>
+                  {
+                      entity.Property(x => x.Quantity).HasPrecision(18, 3);
+                      entity.Property(x => x.UnitCost).HasPrecision(18, 2);
+                      entity.Property(x => x.LineTotal).HasPrecision(18, 2);
+                      entity.HasOne(x => x.SupplierReturn).WithMany(x => x.Items)
+                          .HasForeignKey(x => x.SupplierReturnId).OnDelete(DeleteBehavior.Cascade);
+                      entity.HasOne(x => x.ProductVariant).WithMany()
+                          .HasForeignKey(x => x.ProductVariantId).OnDelete(DeleteBehavior.Restrict);
+                  });
+              }
+          }
+          EOF
+
+      - name: Write supplier controller
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.API/Controllers/SuppliersController.cs <<'EOF'
+          using Microsoft.AspNetCore.Authorization;
+          using Microsoft.AspNetCore.Mvc;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Application.Purchasing;
+          using Outfitters.Domain.Entities;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.API.Controllers;
+
+          [ApiController]
+          [Authorize]
+          [Route("api/suppliers")]
+          public sealed class SuppliersController : ControllerBase
+          {
+              private readonly ApplicationDbContext _db;
+
+              public SuppliersController(ApplicationDbContext db) => _db = db;
+
+              [HttpGet]
+              public async Task<IActionResult> GetAll([FromQuery] string? search)
+              {
+                  var query = _db.Suppliers.AsNoTracking();
+
+                  if (!string.IsNullOrWhiteSpace(search))
+                  {
+                      var term = search.Trim().ToLower();
+                      query = query.Where(x =>
+                          x.Code.ToLower().Contains(term) ||
+                          x.Name.ToLower().Contains(term));
+                  }
+
+                  return Ok(await query.OrderBy(x => x.Name).ToListAsync());
+              }
+
+              [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager,InventoryClerk")]
+              [HttpPost]
+              public async Task<IActionResult> Create(CreateSupplierRequest request)
+              {
+                  var code = request.Code.Trim();
+                  var name = request.Name.Trim();
+
+                  if (string.IsNullOrWhiteSpace(code) || string.IsNullOrWhiteSpace(name))
+                  {
+                      return BadRequest("Supplier code and name are required.");
+                  }
+
+                  if (await _db.Suppliers.AnyAsync(x => x.Code == code))
+                  {
+                      return Conflict("Supplier code already exists.");
+                  }
+
+                  var supplier = new Supplier
+                  {
+                      Code = code,
+                      Name = name,
+                      ContactPerson = request.ContactPerson?.Trim(),
+                      Phone = request.Phone?.Trim(),
+                      Email = request.Email?.Trim(),
+                      Address = request.Address?.Trim(),
+                      TaxIdentificationNumber = request.TaxIdentificationNumber?.Trim(),
+                      PaymentTermsDays = request.PaymentTermsDays
+                  };
+
+                  _db.Suppliers.Add(supplier);
+                  await _db.SaveChangesAsync();
+
+                  return Ok(supplier);
+              }
+          }
+          EOF
+
+      - name: Write purchase order controller
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.API/Controllers/PurchaseOrdersController.cs <<'EOF'
+          using System.Globalization;
+          using System.Security.Claims;
+          using Microsoft.AspNetCore.Authorization;
+          using Microsoft.AspNetCore.Mvc;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Application.Purchasing;
+          using Outfitters.Domain.Entities;
+          using Outfitters.Domain.Enums;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.API.Controllers;
+
+          [ApiController]
+          [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager,InventoryClerk")]
+          [Route("api/purchase-orders")]
+          public sealed class PurchaseOrdersController : ControllerBase
+          {
+              private readonly ApplicationDbContext _db;
+
+              public PurchaseOrdersController(ApplicationDbContext db) => _db = db;
+
+              [HttpGet]
+              public async Task<IActionResult> GetAll([FromQuery] Guid? storeId)
+              {
+                  var query = _db.PurchaseOrders
+                      .AsNoTracking()
+                      .Include(x => x.Supplier)
+                      .Include(x => x.Store)
+                      .AsQueryable();
+
+                  if (storeId.HasValue)
+                  {
+                      query = query.Where(x => x.StoreId == storeId.Value);
+                  }
+
+                  var result = await query
+                      .OrderByDescending(x => x.OrderDateUtc)
+                      .Select(x => new
+                      {
+                          x.Id,
+                          x.PurchaseOrderNumber,
+                          Supplier = x.Supplier.Name,
+                          Store = x.Store.Name,
+                          x.OrderDateUtc,
+                          x.ExpectedDeliveryDateUtc,
+                          x.Status,
+                          x.GrandTotal
+                      })
+                      .ToListAsync();
+
+                  return Ok(result);
+              }
+
+              [HttpPost]
+              public async Task<IActionResult> Create(CreatePurchaseOrderRequest request)
+              {
+                  if (request.Items.Count == 0)
+                  {
+                      return BadRequest("At least one item is required.");
+                  }
+
+                  if (!await _db.Suppliers.AnyAsync(x => x.Id == request.SupplierId && x.IsActive))
+                  {
+                      return BadRequest("Supplier was not found.");
+                  }
+
+                  if (!await _db.Stores.AnyAsync(x => x.Id == request.StoreId && x.IsActive))
+                  {
+                      return BadRequest("Store was not found.");
+                  }
+
+                  var variantIds = request.Items.Select(x => x.ProductVariantId).Distinct().ToArray();
+                  if (variantIds.Length != request.Items.Count)
+                  {
+                      return BadRequest("Duplicate product variants are not allowed.");
+                  }
+
+                  var existingCount = await _db.ProductVariants.CountAsync(x =>
+                      variantIds.Contains(x.Id) && x.IsActive);
+
+                  if (existingCount != variantIds.Length)
+                  {
+                      return BadRequest("One or more product variants were not found.");
+                  }
+
+                  var po = new PurchaseOrder
+                  {
+                      PurchaseOrderNumber = await GeneratePurchaseOrderNumber(),
+                      SupplierId = request.SupplierId,
+                      StoreId = request.StoreId,
+                      CreatedByUserId = GetUserId(),
+                      ExpectedDeliveryDateUtc = request.ExpectedDeliveryDateUtc,
+                      Notes = request.Notes?.Trim(),
+                      Status = PurchaseOrderStatus.Submitted
+                  };
+
+                  foreach (var item in request.Items)
+                  {
+                      if (item.OrderedQuantity <= 0 || item.UnitCost < 0 ||
+                          item.DiscountAmount < 0 || item.TaxAmount < 0)
+                      {
+                          return BadRequest("Purchase-order values are invalid.");
+                      }
+
+                      var gross = item.OrderedQuantity * item.UnitCost;
+                      var total = gross - item.DiscountAmount + item.TaxAmount;
+
+                      po.Items.Add(new PurchaseOrderItem
+                      {
+                          ProductVariantId = item.ProductVariantId,
+                          OrderedQuantity = item.OrderedQuantity,
+                          UnitCost = item.UnitCost,
+                          DiscountAmount = item.DiscountAmount,
+                          TaxAmount = item.TaxAmount,
+                          LineTotal = total
+                      });
+                  }
+
+                  po.Subtotal = po.Items.Sum(x => x.OrderedQuantity * x.UnitCost);
+                  po.DiscountTotal = po.Items.Sum(x => x.DiscountAmount);
+                  po.TaxTotal = po.Items.Sum(x => x.TaxAmount);
+                  po.GrandTotal = po.Items.Sum(x => x.LineTotal);
+
+                  _db.PurchaseOrders.Add(po);
+                  await _db.SaveChangesAsync();
+
+                  return Ok(new
+                  {
+                      po.Id,
+                      po.PurchaseOrderNumber,
+                      po.Status,
+                      po.GrandTotal
+                  });
+              }
+
+              [HttpPost("{id:guid}/receive")]
+              public async Task<IActionResult> Receive(
+                  Guid id,
+                  ReceivePurchaseOrderRequest request)
+              {
+                  if (request.Items.Count == 0)
+                  {
+                      return BadRequest("At least one received item is required.");
+                  }
+
+                  var po = await _db.PurchaseOrders
+                      .Include(x => x.Items)
+                      .SingleOrDefaultAsync(x => x.Id == id);
+
+                  if (po is null)
+                  {
+                      return NotFound();
+                  }
+
+                  if (po.Status is PurchaseOrderStatus.Cancelled or PurchaseOrderStatus.FullyReceived)
+                  {
+                      return BadRequest("This purchase order cannot receive more items.");
+                  }
+
+                  await using var transaction = await _db.Database.BeginTransactionAsync();
+
+                  var receipt = new GoodsReceipt
+                  {
+                      ReceiptNumber = await GenerateGoodsReceiptNumber(),
+                      PurchaseOrderId = po.Id,
+                      StoreId = po.StoreId,
+                      ReceivedByUserId = GetUserId(),
+                      SupplierInvoiceNumber = request.SupplierInvoiceNumber?.Trim(),
+                      Notes = request.Notes?.Trim()
+                  };
+
+                  foreach (var requested in request.Items)
+                  {
+                      var poItem = po.Items.SingleOrDefault(x => x.Id == requested.PurchaseOrderItemId);
+                      if (poItem is null)
+                      {
+                          return BadRequest("Purchase-order item was not found.");
+                      }
+
+                      var remaining = poItem.OrderedQuantity - poItem.ReceivedQuantity;
+                      if (requested.QuantityReceived <= 0 || requested.QuantityReceived > remaining)
+                      {
+                          return BadRequest("Received quantity is invalid.");
+                      }
+
+                      poItem.ReceivedQuantity += requested.QuantityReceived;
+
+                      receipt.Items.Add(new GoodsReceiptItem
+                      {
+                          PurchaseOrderItemId = poItem.Id,
+                          ProductVariantId = poItem.ProductVariantId,
+                          QuantityReceived = requested.QuantityReceived,
+                          UnitCost = requested.UnitCost
+                      });
+
+                      var inventory = await _db.InventoryItems.SingleOrDefaultAsync(x =>
+                          x.StoreId == po.StoreId &&
+                          x.ProductVariantId == poItem.ProductVariantId);
+
+                      if (inventory is null)
+                      {
+                          inventory = new InventoryItem
+                          {
+                              StoreId = po.StoreId,
+                              ProductVariantId = poItem.ProductVariantId
+                          };
+                          _db.InventoryItems.Add(inventory);
+                      }
+
+                      inventory.QuantityOnHand += requested.QuantityReceived;
+                      inventory.UpdatedAtUtc = DateTime.UtcNow;
+
+                      var variant = await _db.ProductVariants.SingleAsync(x =>
+                          x.Id == poItem.ProductVariantId);
+                      variant.CostPrice = requested.UnitCost;
+                      variant.UpdatedAtUtc = DateTime.UtcNow;
+
+                      _db.InventoryTransactions.Add(new InventoryTransaction
+                      {
+                          StoreId = po.StoreId,
+                          ProductVariantId = poItem.ProductVariantId,
+                          TransactionType = InventoryTransactionType.Purchase,
+                          QuantityChange = requested.QuantityReceived,
+                          BalanceAfter = inventory.QuantityOnHand,
+                          ReferenceNumber = receipt.ReceiptNumber,
+                          Remarks = $"Received against {po.PurchaseOrderNumber}",
+                          CreatedByUserId = receipt.ReceivedByUserId
+                      });
+                  }
+
+                  po.Status = po.Items.All(x => x.ReceivedQuantity >= x.OrderedQuantity)
+                      ? PurchaseOrderStatus.FullyReceived
+                      : PurchaseOrderStatus.PartiallyReceived;
+                  po.UpdatedAtUtc = DateTime.UtcNow;
+
+                  _db.GoodsReceipts.Add(receipt);
+                  await _db.SaveChangesAsync();
+                  await transaction.CommitAsync();
+
+                  return Ok(new
+                  {
+                      receipt.Id,
+                      receipt.ReceiptNumber,
+                      po.PurchaseOrderNumber,
+                      po.Status,
+                      receipt.ReceivedAtUtc
+                  });
+              }
+
+              private Guid GetUserId()
+              {
+                  var value = User.FindFirstValue(ClaimTypes.NameIdentifier);
+                  return Guid.TryParse(value, out var id)
+                      ? id
+                      : throw new UnauthorizedAccessException("User identifier is missing.");
+              }
+
+              private async Task<string> GeneratePurchaseOrderNumber()
+              {
+                  var datePart = DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+                  var count = await _db.PurchaseOrders.CountAsync(x =>
+                      x.OrderDateUtc.Date == DateTime.UtcNow.Date);
+                  return $"PO-{datePart}-{count + 1:00000}";
+              }
+
+              private async Task<string> GenerateGoodsReceiptNumber()
+              {
+                  var datePart = DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+                  var count = await _db.GoodsReceipts.CountAsync(x =>
+                      x.ReceivedAtUtc.Date == DateTime.UtcNow.Date);
+                  return $"GR-{datePart}-{count + 1:00000}";
+              }
+          }
+          EOF
+
+      - name: Write supplier returns controller
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.API/Controllers/SupplierReturnsController.cs <<'EOF'
+          using System.Globalization;
+          using System.Security.Claims;
+          using Microsoft.AspNetCore.Authorization;
+          using Microsoft.AspNetCore.Mvc;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Application.Purchasing;
+          using Outfitters.Domain.Entities;
+          using Outfitters.Domain.Enums;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.API.Controllers;
+
+          [ApiController]
+          [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager,InventoryClerk")]
+          [Route("api/supplier-returns")]
+          public sealed class SupplierReturnsController : ControllerBase
+          {
+              private readonly ApplicationDbContext _db;
+
+              public SupplierReturnsController(ApplicationDbContext db) => _db = db;
+
+              [HttpPost]
+              public async Task<IActionResult> Create(CreateSupplierReturnRequest request)
+              {
+                  if (request.Items.Count == 0)
+                  {
+                      return BadRequest("At least one return item is required.");
+                  }
+
+                  if (!await _db.Suppliers.AnyAsync(x => x.Id == request.SupplierId && x.IsActive))
+                  {
+                      return BadRequest("Supplier was not found.");
+                  }
+
+                  if (!await _db.Stores.AnyAsync(x => x.Id == request.StoreId && x.IsActive))
+                  {
+                      return BadRequest("Store was not found.");
+                  }
+
+                  await using var transaction = await _db.Database.BeginTransactionAsync();
+
+                  var supplierReturn = new SupplierReturn
+                  {
+                      ReturnNumber = await GenerateReturnNumber(),
+                      SupplierId = request.SupplierId,
+                      StoreId = request.StoreId,
+                      ProcessedByUserId = GetUserId(),
+                      Status = SupplierReturnStatus.Completed,
+                      Reason = request.Reason?.Trim()
+                  };
+
+                  foreach (var requested in request.Items)
+                  {
+                      if (requested.Quantity <= 0 || requested.UnitCost < 0)
+                      {
+                          return BadRequest("Return quantity and cost are invalid.");
+                      }
+
+                      var inventory = await _db.InventoryItems.SingleOrDefaultAsync(x =>
+                          x.StoreId == request.StoreId &&
+                          x.ProductVariantId == requested.ProductVariantId);
+
+                      if (inventory is null || inventory.QuantityOnHand < requested.Quantity)
+                      {
+                          return BadRequest("Insufficient stock for supplier return.");
+                      }
+
+                      inventory.QuantityOnHand -= requested.Quantity;
+                      inventory.UpdatedAtUtc = DateTime.UtcNow;
+
+                      var lineTotal = requested.Quantity * requested.UnitCost;
+                      supplierReturn.TotalCost += lineTotal;
+                      supplierReturn.Items.Add(new SupplierReturnItem
+                      {
+                          ProductVariantId = requested.ProductVariantId,
+                          Quantity = requested.Quantity,
+                          UnitCost = requested.UnitCost,
+                          LineTotal = lineTotal
+                      });
+
+                      _db.InventoryTransactions.Add(new InventoryTransaction
+                      {
+                          StoreId = request.StoreId,
+                          ProductVariantId = requested.ProductVariantId,
+                          TransactionType = InventoryTransactionType.Adjustment,
+                          QuantityChange = -requested.Quantity,
+                          BalanceAfter = inventory.QuantityOnHand,
+                          ReferenceNumber = supplierReturn.ReturnNumber,
+                          Remarks = $"Supplier return: {request.Reason}",
+                          CreatedByUserId = supplierReturn.ProcessedByUserId
+                      });
+                  }
+
+                  _db.SupplierReturns.Add(supplierReturn);
+                  await _db.SaveChangesAsync();
+                  await transaction.CommitAsync();
+
+                  return Ok(new
+                  {
+                      supplierReturn.Id,
+                      supplierReturn.ReturnNumber,
+                      supplierReturn.TotalCost,
+                      supplierReturn.Status
+                  });
+              }
+
+              private Guid GetUserId()
+              {
+                  var value = User.FindFirstValue(ClaimTypes.NameIdentifier);
+                  return Guid.TryParse(value, out var id)
+                      ? id
+                      : throw new UnauthorizedAccessException("User identifier is missing.");
+              }
+
+              private async Task<string> GenerateReturnNumber()
+              {
+                  var datePart = DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+                  var count = await _db.SupplierReturns.CountAsync(x =>
+                      x.ReturnDateUtc.Date == DateTime.UtcNow.Date);
+                  return $"SR-{datePart}-{count + 1:00000}";
+              }
+          }
+          EOF
+
+      - name: Compile before migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore OutfittersRetailManagementSystem.sln
+          dotnet build OutfittersRetailManagementSystem.sln --configuration Release --no-restore
+
+      - name: Create EF Core migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet tool install --global dotnet-ef --version 9.0.*
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          dotnet ef migrations add AddPurchasingAndSuppliers \
+            --project src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj \
+            --startup-project src/Outfitters.API/Outfitters.API.csproj \
+            --output-dir Persistence/Migrations
+
+      - name: Build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet build OutfittersRetailManagementSystem.sln --configuration Release
+          dotnet test OutfittersRetailManagementSystem.sln --configuration Release --no-build
+
+      - name: Commit milestone 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src tests OutfittersRetailManagementSystem.sln Directory.Build.props docker-compose.yml global.json README.md .gitignore
+          git commit -m "Milestone 5 - Add suppliers, purchase orders, receiving, and returns"
+          git push
