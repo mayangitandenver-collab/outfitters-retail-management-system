@@ -1,0 +1,683 @@
+name: ORMS Milestone 2 - Authentication
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  milestone2:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Add required packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          dotnet add src/Outfitters.API/Outfitters.API.csproj package Microsoft.AspNetCore.Authentication.JwtBearer --version 9.0.*
+          dotnet add src/Outfitters.API/Outfitters.API.csproj package Microsoft.AspNetCore.Identity.EntityFrameworkCore --version 9.0.*
+          dotnet add src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj package Microsoft.EntityFrameworkCore --version 9.0.*
+          dotnet add src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj package Microsoft.EntityFrameworkCore.Design --version 9.0.*
+          dotnet add src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj package Npgsql.EntityFrameworkCore.PostgreSQL --version 9.0.*
+          dotnet add src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj package Microsoft.AspNetCore.Identity.EntityFrameworkCore --version 9.0.*
+          dotnet add src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj package Microsoft.Extensions.Configuration.Abstractions --version 9.0.*
+          dotnet add src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj package Microsoft.Extensions.DependencyInjection.Abstractions --version 9.0.*
+
+      - name: Write authentication foundation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p src/Outfitters.Domain/Common
+          mkdir -p src/Outfitters.Domain/Entities
+          mkdir -p src/Outfitters.Application/Authentication
+          mkdir -p src/Outfitters.Application/Common
+          mkdir -p src/Outfitters.Infrastructure/Persistence
+          mkdir -p src/Outfitters.Infrastructure/Authentication
+          mkdir -p src/Outfitters.API/Controllers
+
+          cat > src/Outfitters.Domain/Common/BaseEntity.cs <<'EOF'
+          namespace Outfitters.Domain.Common;
+
+          public abstract class BaseEntity
+          {
+              public Guid Id { get; set; } = Guid.NewGuid();
+              public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+              public DateTime? UpdatedAtUtc { get; set; }
+              public bool IsDeleted { get; set; }
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/Company.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class Company : BaseEntity
+          {
+              public string Code { get; set; } = string.Empty;
+              public string Name { get; set; } = string.Empty;
+              public bool IsActive { get; set; } = true;
+              public ICollection<Store> Stores { get; set; } = new List<Store>();
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/Store.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class Store : BaseEntity
+          {
+              public Guid CompanyId { get; set; }
+              public Company Company { get; set; } = null!;
+              public string Code { get; set; } = string.Empty;
+              public string Name { get; set; } = string.Empty;
+              public string? Address { get; set; }
+              public bool IsMainStore { get; set; }
+              public bool IsActive { get; set; } = true;
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/ApplicationRole.cs <<'EOF'
+          using Microsoft.AspNetCore.Identity;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class ApplicationRole : IdentityRole<Guid>
+          {
+              public string? Description { get; set; }
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/ApplicationUser.cs <<'EOF'
+          using Microsoft.AspNetCore.Identity;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class ApplicationUser : IdentityUser<Guid>
+          {
+              public string FirstName { get; set; } = string.Empty;
+              public string LastName { get; set; } = string.Empty;
+              public Guid? StoreId { get; set; }
+              public Store? Store { get; set; }
+              public bool IsActive { get; set; } = true;
+              public bool MustChangePassword { get; set; } = true;
+              public DateTime? LastLoginAtUtc { get; set; }
+          }
+          EOF
+
+          cat > src/Outfitters.Application/Authentication/LoginRequest.cs <<'EOF'
+          namespace Outfitters.Application.Authentication;
+
+          public sealed record LoginRequest(string Username, string Password);
+          EOF
+
+          cat > src/Outfitters.Application/Authentication/AuthResponse.cs <<'EOF'
+          namespace Outfitters.Application.Authentication;
+
+          public sealed record AuthResponse(
+              string AccessToken,
+              DateTime ExpiresAtUtc,
+              Guid UserId,
+              string Username,
+              IReadOnlyCollection<string> Roles);
+          EOF
+
+          cat > src/Outfitters.Application/Authentication/IJwtTokenService.cs <<'EOF'
+          using Outfitters.Domain.Entities;
+
+          namespace Outfitters.Application.Authentication;
+
+          public interface IJwtTokenService
+          {
+              AuthResponse CreateToken(ApplicationUser user, IReadOnlyCollection<string> roles);
+          }
+          EOF
+
+          cat > src/Outfitters.Infrastructure/Persistence/ApplicationDbContext.cs <<'EOF'
+          using Microsoft.AspNetCore.Identity;
+          using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Domain.Entities;
+
+          namespace Outfitters.Infrastructure.Persistence;
+
+          public sealed class ApplicationDbContext
+              : IdentityDbContext<ApplicationUser, ApplicationRole, Guid>
+          {
+              public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
+                  : base(options)
+              {
+              }
+
+              public DbSet<Company> Companies => Set<Company>();
+              public DbSet<Store> Stores => Set<Store>();
+
+              protected override void OnModelCreating(ModelBuilder builder)
+              {
+                  base.OnModelCreating(builder);
+
+                  builder.Entity<Company>(entity =>
+                  {
+                      entity.HasIndex(x => x.Code).IsUnique();
+                      entity.Property(x => x.Code).HasMaxLength(30).IsRequired();
+                      entity.Property(x => x.Name).HasMaxLength(200).IsRequired();
+                  });
+
+                  builder.Entity<Store>(entity =>
+                  {
+                      entity.HasIndex(x => new { x.CompanyId, x.Code }).IsUnique();
+                      entity.Property(x => x.Code).HasMaxLength(30).IsRequired();
+                      entity.Property(x => x.Name).HasMaxLength(200).IsRequired();
+                      entity.HasOne(x => x.Company)
+                          .WithMany(x => x.Stores)
+                          .HasForeignKey(x => x.CompanyId)
+                          .OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<ApplicationUser>(entity =>
+                  {
+                      entity.Property(x => x.FirstName).HasMaxLength(100).IsRequired();
+                      entity.Property(x => x.LastName).HasMaxLength(100).IsRequired();
+                      entity.HasOne(x => x.Store)
+                          .WithMany()
+                          .HasForeignKey(x => x.StoreId)
+                          .OnDelete(DeleteBehavior.SetNull);
+                  });
+              }
+          }
+          EOF
+
+          cat > src/Outfitters.Infrastructure/Authentication/JwtOptions.cs <<'EOF'
+          namespace Outfitters.Infrastructure.Authentication;
+
+          public sealed class JwtOptions
+          {
+              public const string SectionName = "Jwt";
+              public string Issuer { get; set; } = "Outfitters";
+              public string Audience { get; set; } = "OutfittersClients";
+              public string SigningKey { get; set; } = string.Empty;
+              public int ExpiryMinutes { get; set; } = 60;
+          }
+          EOF
+
+          cat > src/Outfitters.Infrastructure/Authentication/JwtTokenService.cs <<'EOF'
+          using System.IdentityModel.Tokens.Jwt;
+          using System.Security.Claims;
+          using System.Text;
+          using Microsoft.Extensions.Options;
+          using Microsoft.IdentityModel.Tokens;
+          using Outfitters.Application.Authentication;
+          using Outfitters.Domain.Entities;
+
+          namespace Outfitters.Infrastructure.Authentication;
+
+          public sealed class JwtTokenService : IJwtTokenService
+          {
+              private readonly JwtOptions _options;
+
+              public JwtTokenService(IOptions<JwtOptions> options)
+              {
+                  _options = options.Value;
+              }
+
+              public AuthResponse CreateToken(
+                  ApplicationUser user,
+                  IReadOnlyCollection<string> roles)
+              {
+                  var expiresAtUtc = DateTime.UtcNow.AddMinutes(_options.ExpiryMinutes);
+
+                  var claims = new List<Claim>
+                  {
+                      new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
+                      new(JwtRegisteredClaimNames.UniqueName, user.UserName ?? string.Empty),
+                      new(ClaimTypes.NameIdentifier, user.Id.ToString()),
+                      new(ClaimTypes.Name, user.UserName ?? string.Empty)
+                  };
+
+                  claims.AddRange(roles.Select(role => new Claim(ClaimTypes.Role, role)));
+
+                  var key = new SymmetricSecurityKey(
+                      Encoding.UTF8.GetBytes(_options.SigningKey));
+
+                  var credentials = new SigningCredentials(
+                      key,
+                      SecurityAlgorithms.HmacSha256);
+
+                  var token = new JwtSecurityToken(
+                      issuer: _options.Issuer,
+                      audience: _options.Audience,
+                      claims: claims,
+                      expires: expiresAtUtc,
+                      signingCredentials: credentials);
+
+                  return new AuthResponse(
+                      new JwtSecurityTokenHandler().WriteToken(token),
+                      expiresAtUtc,
+                      user.Id,
+                      user.UserName ?? string.Empty,
+                      roles);
+              }
+          }
+          EOF
+
+          cat > src/Outfitters.Infrastructure/Persistence/DatabaseSeeder.cs <<'EOF'
+          using Microsoft.AspNetCore.Identity;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Domain.Entities;
+
+          namespace Outfitters.Infrastructure.Persistence;
+
+          public static class DatabaseSeeder
+          {
+              public static async Task SeedAsync(
+                  ApplicationDbContext db,
+                  UserManager<ApplicationUser> userManager,
+                  RoleManager<ApplicationRole> roleManager)
+              {
+                  await db.Database.MigrateAsync();
+
+                  string[] roles =
+                  [
+                      "SuperAdministrator",
+                      "Administrator",
+                      "StoreManager",
+                      "Cashier",
+                      "InventoryClerk",
+                      "Auditor"
+                  ];
+
+                  foreach (var roleName in roles)
+                  {
+                      if (!await roleManager.RoleExistsAsync(roleName))
+                      {
+                          await roleManager.CreateAsync(new ApplicationRole
+                          {
+                              Name = roleName,
+                              NormalizedName = roleName.ToUpperInvariant()
+                          });
+                      }
+                  }
+
+                  var company = await db.Companies.FirstOrDefaultAsync();
+                  if (company is null)
+                  {
+                      company = new Company { Code = "OUT", Name = "Outfitters Apparel Store" };
+                      db.Companies.Add(company);
+                      await db.SaveChangesAsync();
+                  }
+
+                  var store = await db.Stores.FirstOrDefaultAsync();
+                  if (store is null)
+                  {
+                      store = new Store
+                      {
+                          CompanyId = company.Id,
+                          Code = "MAIN",
+                          Name = "Main Store",
+                          IsMainStore = true
+                      };
+                      db.Stores.Add(store);
+                      await db.SaveChangesAsync();
+                  }
+
+                  const string adminUsername = "admin";
+                  var admin = await userManager.FindByNameAsync(adminUsername);
+                  if (admin is null)
+                  {
+                      admin = new ApplicationUser
+                      {
+                          UserName = adminUsername,
+                          Email = "admin@outfitters.local",
+                          FirstName = "System",
+                          LastName = "Administrator",
+                          StoreId = store.Id,
+                          EmailConfirmed = true,
+                          MustChangePassword = true
+                      };
+
+                      var result = await userManager.CreateAsync(admin, "Admin@123");
+                      if (!result.Succeeded)
+                      {
+                          throw new InvalidOperationException(
+                              string.Join("; ", result.Errors.Select(x => x.Description)));
+                      }
+
+                      await userManager.AddToRoleAsync(admin, "SuperAdministrator");
+                  }
+              }
+          }
+          EOF
+
+          cat > src/Outfitters.API/Controllers/AuthController.cs <<'EOF'
+          using Microsoft.AspNetCore.Authorization;
+          using Microsoft.AspNetCore.Identity;
+          using Microsoft.AspNetCore.Mvc;
+          using Outfitters.Application.Authentication;
+          using Outfitters.Domain.Entities;
+
+          namespace Outfitters.API.Controllers;
+
+          [ApiController]
+          [Route("api/auth")]
+          public sealed class AuthController : ControllerBase
+          {
+              private readonly UserManager<ApplicationUser> _userManager;
+              private readonly SignInManager<ApplicationUser> _signInManager;
+              private readonly IJwtTokenService _tokenService;
+
+              public AuthController(
+                  UserManager<ApplicationUser> userManager,
+                  SignInManager<ApplicationUser> signInManager,
+                  IJwtTokenService tokenService)
+              {
+                  _userManager = userManager;
+                  _signInManager = signInManager;
+                  _tokenService = tokenService;
+              }
+
+              [AllowAnonymous]
+              [HttpPost("login")]
+              public async Task<ActionResult<AuthResponse>> Login(LoginRequest request)
+              {
+                  var user = await _userManager.FindByNameAsync(request.Username);
+                  if (user is null || !user.IsActive)
+                  {
+                      return Unauthorized();
+                  }
+
+                  var result = await _signInManager.CheckPasswordSignInAsync(
+                      user,
+                      request.Password,
+                      lockoutOnFailure: true);
+
+                  if (!result.Succeeded)
+                  {
+                      return Unauthorized();
+                  }
+
+                  user.LastLoginAtUtc = DateTime.UtcNow;
+                  await _userManager.UpdateAsync(user);
+
+                  var roles = await _userManager.GetRolesAsync(user);
+                  return Ok(_tokenService.CreateToken(user, roles.ToArray()));
+              }
+
+              [Authorize]
+              [HttpGet("me")]
+              public async Task<IActionResult> Me()
+              {
+                  var user = await _userManager.GetUserAsync(User);
+                  if (user is null)
+                  {
+                      return Unauthorized();
+                  }
+
+                  var roles = await _userManager.GetRolesAsync(user);
+                  return Ok(new
+                  {
+                      user.Id,
+                      user.UserName,
+                      user.FirstName,
+                      user.LastName,
+                      user.StoreId,
+                      Roles = roles
+                  });
+              }
+          }
+          EOF
+
+          cat > src/Outfitters.Infrastructure/DependencyInjection.cs <<'EOF'
+          using System.Text;
+          using Microsoft.AspNetCore.Authentication.JwtBearer;
+          using Microsoft.AspNetCore.Identity;
+          using Microsoft.EntityFrameworkCore;
+          using Microsoft.Extensions.Configuration;
+          using Microsoft.Extensions.DependencyInjection;
+          using Microsoft.IdentityModel.Tokens;
+          using Outfitters.Application.Authentication;
+          using Outfitters.Domain.Entities;
+          using Outfitters.Infrastructure.Authentication;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.Infrastructure;
+
+          public static class DependencyInjection
+          {
+              public static IServiceCollection AddInfrastructure(
+                  this IServiceCollection services,
+                  IConfiguration configuration)
+              {
+                  var connectionString = configuration.GetConnectionString("DefaultConnection")
+                      ?? throw new InvalidOperationException(
+                          "Connection string 'DefaultConnection' is not configured.");
+
+                  services.AddDbContext<ApplicationDbContext>(options =>
+                      options.UseNpgsql(connectionString));
+
+                  services
+                      .AddIdentityCore<ApplicationUser>(options =>
+                      {
+                          options.Password.RequiredLength = 8;
+                          options.Password.RequireDigit = true;
+                          options.Password.RequireUppercase = true;
+                          options.Password.RequireLowercase = true;
+                          options.Password.RequireNonAlphanumeric = true;
+                          options.Lockout.MaxFailedAccessAttempts = 5;
+                      })
+                      .AddRoles<ApplicationRole>()
+                      .AddSignInManager()
+                      .AddEntityFrameworkStores<ApplicationDbContext>();
+
+                  var jwtSection = configuration.GetSection(JwtOptions.SectionName);
+                  services.Configure<JwtOptions>(jwtSection);
+                  var jwt = jwtSection.Get<JwtOptions>()
+                      ?? throw new InvalidOperationException("JWT settings are missing.");
+
+                  if (string.IsNullOrWhiteSpace(jwt.SigningKey) || jwt.SigningKey.Length < 32)
+                  {
+                      throw new InvalidOperationException(
+                          "JWT signing key must contain at least 32 characters.");
+                  }
+
+                  services
+                      .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+                      .AddJwtBearer(options =>
+                      {
+                          options.TokenValidationParameters = new TokenValidationParameters
+                          {
+                              ValidateIssuer = true,
+                              ValidateAudience = true,
+                              ValidateLifetime = true,
+                              ValidateIssuerSigningKey = true,
+                              ValidIssuer = jwt.Issuer,
+                              ValidAudience = jwt.Audience,
+                              IssuerSigningKey = new SymmetricSecurityKey(
+                                  Encoding.UTF8.GetBytes(jwt.SigningKey)),
+                              ClockSkew = TimeSpan.FromMinutes(1)
+                          };
+                      });
+
+                  services.AddAuthorization();
+                  services.AddScoped<IJwtTokenService, JwtTokenService>();
+
+                  return services;
+              }
+          }
+          EOF
+
+          cat > src/Outfitters.API/Program.cs <<'EOF'
+          using Microsoft.AspNetCore.Identity;
+          using Microsoft.EntityFrameworkCore;
+          using Microsoft.OpenApi.Models;
+          using Outfitters.Domain.Entities;
+          using Outfitters.Infrastructure;
+          using Outfitters.Infrastructure.Persistence;
+
+          var builder = WebApplication.CreateBuilder(args);
+
+          builder.Services.AddControllers();
+          builder.Services.AddEndpointsApiExplorer();
+          builder.Services.AddSwaggerGen(options =>
+          {
+              options.SwaggerDoc("v1", new OpenApiInfo
+              {
+                  Title = "Outfitters Retail Management API",
+                  Version = "v1"
+              });
+
+              options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+              {
+                  Type = SecuritySchemeType.Http,
+                  Scheme = "bearer",
+                  BearerFormat = "JWT",
+                  Name = "Authorization",
+                  In = ParameterLocation.Header
+              });
+
+              options.AddSecurityRequirement(new OpenApiSecurityRequirement
+              {
+                  {
+                      new OpenApiSecurityScheme
+                      {
+                          Reference = new OpenApiReference
+                          {
+                              Type = ReferenceType.SecurityScheme,
+                              Id = "Bearer"
+                          }
+                      },
+                      Array.Empty<string>()
+                  }
+              });
+          });
+
+          builder.Services.AddHealthChecks();
+          builder.Services.AddInfrastructure(builder.Configuration);
+
+          var app = builder.Build();
+
+          if (app.Environment.IsDevelopment())
+          {
+              app.UseSwagger();
+              app.UseSwaggerUI();
+          }
+
+          app.UseHttpsRedirection();
+          app.UseAuthentication();
+          app.UseAuthorization();
+
+          app.MapControllers();
+          app.MapHealthChecks("/health");
+
+          using (var scope = app.Services.CreateScope())
+          {
+              var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+              var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+              var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<ApplicationRole>>();
+              await DatabaseSeeder.SeedAsync(db, userManager, roleManager);
+          }
+
+          app.Run();
+
+          public partial class Program;
+          EOF
+
+          cat > src/Outfitters.API/appsettings.json <<'EOF'
+          {
+            "ConnectionStrings": {
+              "DefaultConnection": "Host=localhost;Port=5432;Database=outfitters;Username=postgres;Password=postgres"
+            },
+            "Jwt": {
+              "Issuer": "Outfitters",
+              "Audience": "OutfittersClients",
+              "SigningKey": "CHANGE-THIS-DEVELOPMENT-KEY-TO-A-SECURE-SECRET-123456789",
+              "ExpiryMinutes": 60
+            },
+            "Logging": {
+              "LogLevel": {
+                "Default": "Information",
+                "Microsoft.AspNetCore": "Warning"
+              }
+            },
+            "AllowedHosts": "*"
+          }
+          EOF
+
+      - name: Create EF Core migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet tool install --global dotnet-ef --version 9.0.*
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          dotnet ef migrations add InitialIdentityAndStores \
+            --project src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj \
+            --startup-project src/Outfitters.API/Outfitters.API.csproj \
+            --output-dir Persistence/Migrations
+
+      - name: Restore, build, and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore OutfittersRetailManagementSystem.sln
+          dotnet build OutfittersRetailManagementSystem.sln --configuration Release --no-restore
+          dotnet test OutfittersRetailManagementSystem.sln --configuration Release --no-build
+
+      - name: Replace CI workflow
+        shell: bash
+        run: |
+          cat > .github/workflows/dotnet-ci.yml <<'EOF'
+          name: Build and Test
+
+          on:
+            push:
+              branches: [main]
+            pull_request:
+              branches: [main]
+            workflow_dispatch:
+
+          permissions:
+            contents: read
+
+          jobs:
+            build:
+              runs-on: ubuntu-latest
+
+              steps:
+                - name: Check out repository
+                  uses: actions/checkout@v4
+
+                - name: Set up .NET 9
+                  uses: actions/setup-dotnet@v4
+                  with:
+                    dotnet-version: 9.0.x
+
+                - name: Restore
+                  run: dotnet restore OutfittersRetailManagementSystem.sln
+
+                - name: Build
+                  run: dotnet build OutfittersRetailManagementSystem.sln --configuration Release --no-restore
+
+                - name: Test
+                  run: dotnet test OutfittersRetailManagementSystem.sln --configuration Release --no-build
+          EOF
+
+      - name: Commit milestone 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "Milestone 2 - Add authentication, identity, stores, and JWT"
+          git push
