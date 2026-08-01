@@ -24,9 +24,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          rm -rf src tests OutfittersRetailManagementSystem.sln Directory.Build.props docker-compose.yml .gitignore
+          rm -rf src tests OutfittersRetailManagementSystem.sln OutfittersRetailManagementSystem.slnx Directory.Build.props docker-compose.yml .gitignore global.json
 
-          dotnet new sln -n OutfittersRetailManagementSystem
+          SDK_VERSION="$(dotnet --version)"
+          dotnet new globaljson --sdk-version "$SDK_VERSION" --roll-forward latestPatch
+          dotnet new sln -n OutfittersRetailManagementSystem --format sln
           dotnet new classlib -n Outfitters.Domain -o src/Outfitters.Domain --framework net9.0
           dotnet new classlib -n Outfitters.Application -o src/Outfitters.Application --framework net9.0
           dotnet new classlib -n Outfitters.Infrastructure -o src/Outfitters.Infrastructure --framework net9.0
