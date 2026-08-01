@@ -1,0 +1,342 @@
+name: Bootstrap ORMS Foundation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Generate solution and projects
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf src tests OutfittersRetailManagementSystem.sln Directory.Build.props docker-compose.yml .gitignore
+
+          dotnet new sln -n OutfittersRetailManagementSystem
+          dotnet new classlib -n Outfitters.Domain -o src/Outfitters.Domain --framework net9.0
+          dotnet new classlib -n Outfitters.Application -o src/Outfitters.Application --framework net9.0
+          dotnet new classlib -n Outfitters.Infrastructure -o src/Outfitters.Infrastructure --framework net9.0
+          dotnet new webapi -n Outfitters.API -o src/Outfitters.API --framework net9.0 --use-controllers false --no-https
+          dotnet new xunit -n Outfitters.Tests -o tests/Outfitters.Tests --framework net9.0
+
+          dotnet sln OutfittersRetailManagementSystem.sln add \
+            src/Outfitters.Domain/Outfitters.Domain.csproj \
+            src/Outfitters.Application/Outfitters.Application.csproj \
+            src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj \
+            src/Outfitters.API/Outfitters.API.csproj \
+            tests/Outfitters.Tests/Outfitters.Tests.csproj
+
+          dotnet add src/Outfitters.Application/Outfitters.Application.csproj reference src/Outfitters.Domain/Outfitters.Domain.csproj
+          dotnet add src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj reference \
+            src/Outfitters.Domain/Outfitters.Domain.csproj \
+            src/Outfitters.Application/Outfitters.Application.csproj
+          dotnet add src/Outfitters.API/Outfitters.API.csproj reference \
+            src/Outfitters.Application/Outfitters.Application.csproj \
+            src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj
+          dotnet add tests/Outfitters.Tests/Outfitters.Tests.csproj reference src/Outfitters.Domain/Outfitters.Domain.csproj
+
+          dotnet add src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj package Microsoft.EntityFrameworkCore --version 9.0.*
+          dotnet add src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj package Npgsql.EntityFrameworkCore.PostgreSQL --version 9.0.*
+          dotnet add src/Outfitters.API/Outfitters.API.csproj package Swashbuckle.AspNetCore
+          dotnet add src/Outfitters.API/Outfitters.API.csproj package Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore --version 9.0.*
+
+          rm -f \
+            src/Outfitters.Domain/Class1.cs \
+            src/Outfitters.Application/Class1.cs \
+            src/Outfitters.Infrastructure/Class1.cs \
+            tests/Outfitters.Tests/UnitTest1.cs
+
+      - name: Write foundation source files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p \
+            src/Outfitters.Domain/Common \
+            src/Outfitters.Infrastructure/Persistence
+
+          cat > Directory.Build.props <<'EOF'
+          <Project>
+            <PropertyGroup>
+              <Nullable>enable</Nullable>
+              <ImplicitUsings>enable</ImplicitUsings>
+              <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+              <AnalysisLevel>latest</AnalysisLevel>
+            </PropertyGroup>
+          </Project>
+          EOF
+
+          cat > .gitignore <<'EOF'
+          **/bin/
+          **/obj/
+          .vs/
+          .vscode/
+          TestResults/
+          publish/
+          *.user
+          *.suo
+          .env
+          EOF
+
+          cat > src/Outfitters.Domain/Common/BaseEntity.cs <<'EOF'
+          namespace Outfitters.Domain.Common;
+
+          public abstract class BaseEntity
+          {
+              public Guid Id { get; set; } = Guid.NewGuid();
+              public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+              public DateTime? UpdatedAtUtc { get; set; }
+              public bool IsDeleted { get; set; }
+          }
+          EOF
+
+          cat > src/Outfitters.Application/DependencyInjection.cs <<'EOF'
+          using Microsoft.Extensions.DependencyInjection;
+
+          namespace Outfitters.Application;
+
+          public static class DependencyInjection
+          {
+              public static IServiceCollection AddApplication(this IServiceCollection services)
+              {
+                  return services;
+              }
+          }
+          EOF
+
+          cat > src/Outfitters.Infrastructure/Persistence/ApplicationDbContext.cs <<'EOF'
+          using Microsoft.EntityFrameworkCore;
+
+          namespace Outfitters.Infrastructure.Persistence;
+
+          public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
+              : DbContext(options);
+          EOF
+
+          cat > src/Outfitters.Infrastructure/DependencyInjection.cs <<'EOF'
+          using Microsoft.EntityFrameworkCore;
+          using Microsoft.Extensions.Configuration;
+          using Microsoft.Extensions.DependencyInjection;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.Infrastructure;
+
+          public static class DependencyInjection
+          {
+              public static IServiceCollection AddInfrastructure(
+                  this IServiceCollection services,
+                  IConfiguration configuration)
+              {
+                  var connectionString = configuration.GetConnectionString("DefaultConnection")
+                      ?? throw new InvalidOperationException("Connection string 'DefaultConnection' is missing.");
+
+                  services.AddDbContext<ApplicationDbContext>(options =>
+                      options.UseNpgsql(connectionString));
+
+                  return services;
+              }
+          }
+          EOF
+
+          cat > src/Outfitters.API/Program.cs <<'EOF'
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Application;
+          using Outfitters.Infrastructure;
+          using Outfitters.Infrastructure.Persistence;
+
+          var builder = WebApplication.CreateBuilder(args);
+
+          builder.Services.AddApplication();
+          builder.Services.AddInfrastructure(builder.Configuration);
+          builder.Services.AddEndpointsApiExplorer();
+          builder.Services.AddSwaggerGen();
+          builder.Services.AddHealthChecks()
+              .AddDbContextCheck<ApplicationDbContext>("postgresql");
+
+          var app = builder.Build();
+
+          if (app.Environment.IsDevelopment())
+          {
+              app.UseSwagger();
+              app.UseSwaggerUI();
+          }
+
+          app.MapGet("/", () => Results.Ok(new
+          {
+              service = "Outfitters Retail Management System API",
+              status = "running",
+              version = "0.1.0"
+          }))
+          .WithName("GetApiStatus")
+          .WithOpenApi();
+
+          app.MapHealthChecks("/health");
+
+          app.Run();
+
+          public partial class Program
+          {
+          }
+          EOF
+
+          cat > src/Outfitters.API/appsettings.json <<'EOF'
+          {
+            "ConnectionStrings": {
+              "DefaultConnection": "Host=localhost;Port=5432;Database=outfitters;Username=postgres;Password=postgres"
+            },
+            "Logging": {
+              "LogLevel": {
+                "Default": "Information",
+                "Microsoft.AspNetCore": "Warning"
+              }
+            },
+            "AllowedHosts": "*"
+          }
+          EOF
+
+          cat > src/Outfitters.API/appsettings.Development.json <<'EOF'
+          {
+            "Logging": {
+              "LogLevel": {
+                "Default": "Information",
+                "Microsoft.AspNetCore": "Information"
+              }
+            }
+          }
+          EOF
+
+          cat > tests/Outfitters.Tests/BaseEntityTests.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Tests;
+
+          public sealed class BaseEntityTests
+          {
+              private sealed class TestEntity : BaseEntity
+              {
+              }
+
+              [Fact]
+              public void New_entity_has_identifier_and_utc_created_timestamp()
+              {
+                  var entity = new TestEntity();
+
+                  Assert.NotEqual(Guid.Empty, entity.Id);
+                  Assert.True(entity.CreatedAtUtc <= DateTime.UtcNow);
+                  Assert.False(entity.IsDeleted);
+              }
+          }
+          EOF
+
+          cat > src/Outfitters.API/Dockerfile <<'EOF'
+          FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+          WORKDIR /src
+          COPY . .
+          RUN dotnet restore OutfittersRetailManagementSystem.sln
+          RUN dotnet publish src/Outfitters.API/Outfitters.API.csproj -c Release -o /app/publish --no-restore
+
+          FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS final
+          WORKDIR /app
+          COPY --from=build /app/publish .
+          ENV ASPNETCORE_URLS=http://+:8080
+          EXPOSE 8080
+          ENTRYPOINT ["dotnet", "Outfitters.API.dll"]
+          EOF
+
+          cat > docker-compose.yml <<'EOF'
+          services:
+            postgres:
+              image: postgres:17-alpine
+              environment:
+                POSTGRES_DB: outfitters
+                POSTGRES_USER: postgres
+                POSTGRES_PASSWORD: postgres
+              ports:
+                - "5432:5432"
+              volumes:
+                - outfitters_postgres:/var/lib/postgresql/data
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U postgres -d outfitters"]
+                interval: 5s
+                timeout: 5s
+                retries: 10
+
+            api:
+              build:
+                context: .
+                dockerfile: src/Outfitters.API/Dockerfile
+              environment:
+                ASPNETCORE_ENVIRONMENT: Development
+                ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=outfitters;Username=postgres;Password=postgres
+              ports:
+                - "8080:8080"
+              depends_on:
+                postgres:
+                  condition: service_healthy
+
+          volumes:
+            outfitters_postgres:
+          EOF
+
+          cat > README.md <<'EOF'
+          # Outfitters Retail Management System
+
+          ORMS is a multi-store apparel retail platform built with ASP.NET Core, PostgreSQL, and a future Windows POS client.
+
+          ## Milestone 1
+
+          - .NET 9 solution using layered architecture
+          - ASP.NET Core minimal API
+          - PostgreSQL through Entity Framework Core and Npgsql
+          - Swagger/OpenAPI in development
+          - `/health` database health endpoint
+          - Docker Compose for API and PostgreSQL
+          - xUnit tests
+          - GitHub Actions build and test workflow
+
+          ## Run with Docker
+
+          ```bash
+          docker compose up --build
+          ```
+
+          API: `http://localhost:8080`
+
+          Swagger: `http://localhost:8080/swagger`
+          EOF
+
+      - name: Restore, build, and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore OutfittersRetailManagementSystem.sln
+          dotnet build OutfittersRetailManagementSystem.sln --configuration Release --no-restore
+          dotnet test OutfittersRetailManagementSystem.sln --configuration Release --no-build
+
+      - name: Commit generated foundation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Milestone 1 - Add verified backend foundation"
+            git push origin HEAD:main
+          fi
