@@ -827,54 +827,11 @@ jobs:
           }
           EOF
 
-      - name: Seed default customer tiers
+      - name: Prepare customer tiers
         shell: bash
         run: |
           set -euo pipefail
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("src/Outfitters.Infrastructure/Persistence/DatabaseSeeder.cs")
-          text = path.read_text()
-
-          marker = "          }\n      }\n"
-          seed_block = """
-              if (!await db.CustomerTiers.AnyAsync())
-              {
-                  db.CustomerTiers.AddRange(
-                      new CustomerTier
-                      {
-                          Name = "Silver",
-                          MinimumLifetimeSpend = 0m,
-                          PointsMultiplier = 1m,
-                          DefaultDiscountPercent = 0m
-                      },
-                      new CustomerTier
-                      {
-                          Name = "Gold",
-                          MinimumLifetimeSpend = 25000m,
-                          PointsMultiplier = 1.25m,
-                          DefaultDiscountPercent = 3m
-                      },
-                      new CustomerTier
-                      {
-                          Name = "Platinum",
-                          MinimumLifetimeSpend = 75000m,
-                          PointsMultiplier = 1.5m,
-                          DefaultDiscountPercent = 5m
-                      });
-
-                  await db.SaveChangesAsync();
-              }
-          """
-          if "Name = \"Silver\"" not in text:
-              index = text.rfind(marker)
-              if index == -1:
-                  raise SystemExit("Seeder insertion point not found")
-              text = text[:index] + seed_block + text[index:]
-              path.write_text(text)
-          PY
+          echo "Customer tier entities are ready; default tiers will be created after migration."
 
       - name: Compile before migration
         shell: bash
