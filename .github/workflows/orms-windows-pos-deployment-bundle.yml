@@ -1,0 +1,578 @@
+name: ORMS Windows POS Deployment Bundle
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows_bundle:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Create Philippine production settings
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          New-Item -ItemType Directory -Force -Path deployment/windows | Out-Null
+          New-Item -ItemType Directory -Force -Path tools/Outfitters.PrinterTool | Out-Null
+
+          @'
+          {
+            "Culture": {
+              "DefaultCulture": "en-PH",
+              "DefaultUICulture": "en-PH",
+              "CurrencyCode": "PHP",
+              "CurrencySymbol": "₱",
+              "TimeZoneId": "Asia/Manila"
+            },
+            "Receipt": {
+              "PaperWidth": 80,
+              "CharactersPerLine": 42,
+              "OpenCashDrawerAfterSale": true,
+              "PrintMerchantCopy": true
+            },
+            "ConnectionStrings": {
+              "DefaultConnection": "Host=localhost;Port=5432;Database=outfitters;Username=outfitters;Password=CHANGE_ME"
+            },
+            "AllowedHosts": "*"
+          }
+          '@ | Set-Content -Encoding UTF8 src/Outfitters.API/appsettings.Production.json
+
+          @'
+          {
+            "Api": {
+              "BaseUrl": "http://localhost:8080"
+            },
+            "Culture": {
+              "DefaultCulture": "en-PH",
+              "DefaultUICulture": "en-PH",
+              "CurrencyCode": "PHP",
+              "CurrencySymbol": "₱",
+              "TimeZoneId": "Asia/Manila"
+            },
+            "AllowedHosts": "*"
+          }
+          '@ | Set-Content -Encoding UTF8 src/Outfitters.Web/appsettings.Production.json
+
+      - name: Create Windows ESC POS printer and cash drawer utility
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          @'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net9.0</TargetFramework>
+              <ImplicitUsings>enable</ImplicitUsings>
+              <Nullable>enable</Nullable>
+              <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+              <SelfContained>true</SelfContained>
+              <PublishSingleFile>true</PublishSingleFile>
+              <PublishTrimmed>false</PublishTrimmed>
+            </PropertyGroup>
+          </Project>
+          '@ | Set-Content -Encoding UTF8 tools/Outfitters.PrinterTool/Outfitters.PrinterTool.csproj
+
+          @'
+          using System.ComponentModel;
+          using System.Runtime.InteropServices;
+          using System.Text;
+
+          Console.OutputEncoding = Encoding.UTF8;
+
+          if (args.Length < 2)
+          {
+              PrintUsage();
+              return 2;
+          }
+
+          var command = args[0].Trim().ToLowerInvariant();
+          var printerName = args[1];
+
+          try
+          {
+              switch (command)
+              {
+                  case "test":
+                      var width = args.Length >= 3 && int.TryParse(args[2], out var parsedWidth)
+                          ? parsedWidth
+                          : 80;
+                      RawPrinter.Send(printerName, EscPos.CreateTestReceipt(width));
+                      Console.WriteLine($"Test receipt sent to '{printerName}'.");
+                      break;
+
+                  case "drawer":
+                      RawPrinter.Send(printerName, EscPos.OpenDrawer());
+                      Console.WriteLine($"Cash-drawer command sent through '{printerName}'.");
+                      break;
+
+                  case "text":
+                      if (args.Length < 3)
+                      {
+                          Console.Error.WriteLine("Text is required.");
+                          return 2;
+                      }
+
+                      RawPrinter.Send(
+                          printerName,
+                          EscPos.CreatePlainReceipt(string.Join(" ", args.Skip(2))));
+                      Console.WriteLine($"Receipt text sent to '{printerName}'.");
+                      break;
+
+                  default:
+                      PrintUsage();
+                      return 2;
+              }
+
+              return 0;
+          }
+          catch (Exception exception)
+          {
+              Console.Error.WriteLine(exception.Message);
+              return 1;
+          }
+
+          static void PrintUsage()
+          {
+              Console.WriteLine("OUTFITTERS Printer Tool");
+              Console.WriteLine();
+              Console.WriteLine("Usage:");
+              Console.WriteLine("  Outfitters.PrinterTool.exe test <PrinterName> [58|80]");
+              Console.WriteLine("  Outfitters.PrinterTool.exe drawer <PrinterName>");
+              Console.WriteLine("  Outfitters.PrinterTool.exe text <PrinterName> <Text>");
+          }
+
+          static class EscPos
+          {
+              private static readonly byte[] Initialize = [0x1B, 0x40];
+              private static readonly byte[] AlignCenter = [0x1B, 0x61, 0x01];
+              private static readonly byte[] AlignLeft = [0x1B, 0x61, 0x00];
+              private static readonly byte[] BoldOn = [0x1B, 0x45, 0x01];
+              private static readonly byte[] BoldOff = [0x1B, 0x45, 0x00];
+              private static readonly byte[] Cut = [0x1D, 0x56, 0x00];
+
+              public static byte[] OpenDrawer() =>
+                  [0x1B, 0x70, 0x00, 0x19, 0xFA];
+
+              public static byte[] CreateTestReceipt(int paperWidth)
+              {
+                  var columns = paperWidth == 58 ? 32 : 42;
+                  var separator = new string('-', columns);
+                  var text = new List<byte>();
+
+                  text.AddRange(Initialize);
+                  text.AddRange(AlignCenter);
+                  text.AddRange(BoldOn);
+                  text.AddRange(Encode("OUTFITTERS APPAREL STORE\n"));
+                  text.AddRange(BoldOff);
+                  text.AddRange(Encode("Printer and Cash Drawer Test\n"));
+                  text.AddRange(Encode($"{separator}\n"));
+                  text.AddRange(AlignLeft);
+                  text.AddRange(Encode($"Paper Width: {paperWidth} mm\n"));
+                  text.AddRange(Encode($"Currency: Philippine Peso (PHP)\n"));
+                  text.AddRange(Encode($"Sample Total: ₱1,234.56\n"));
+                  text.AddRange(Encode($"Date: {DateTime.Now:MM/dd/yyyy hh:mm tt}\n"));
+                  text.AddRange(Encode($"{separator}\n"));
+                  text.AddRange(Encode("If this receipt is clear, printing works.\n"));
+                  text.AddRange(Encode("The cash drawer will be triggered next.\n\n\n"));
+                  text.AddRange(OpenDrawer());
+                  text.AddRange(Cut);
+
+                  return text.ToArray();
+              }
+
+              public static byte[] CreatePlainReceipt(string value)
+              {
+                  var bytes = new List<byte>();
+                  bytes.AddRange(Initialize);
+                  bytes.AddRange(AlignLeft);
+                  bytes.AddRange(Encode(value + "\n\n\n"));
+                  bytes.AddRange(Cut);
+                  return bytes.ToArray();
+              }
+
+              private static byte[] Encode(string value)
+              {
+                  // Most ESC/POS Windows drivers accept UTF-8 or map the peso symbol.
+                  // The printer profile may need a code-page adjustment for older models.
+                  return Encoding.UTF8.GetBytes(value);
+              }
+          }
+
+          static class RawPrinter
+          {
+              [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+              private sealed class DocInfo
+              {
+                  [MarshalAs(UnmanagedType.LPWStr)]
+                  public string DocumentName = "OUTFITTERS ESC POS";
+
+                  [MarshalAs(UnmanagedType.LPWStr)]
+                  public string? OutputFile;
+
+                  [MarshalAs(UnmanagedType.LPWStr)]
+                  public string DataType = "RAW";
+              }
+
+              [DllImport("winspool.drv", SetLastError = true, CharSet = CharSet.Unicode)]
+              private static extern bool OpenPrinter(
+                  string printerName,
+                  out IntPtr printerHandle,
+                  IntPtr defaults);
+
+              [DllImport("winspool.drv", SetLastError = true)]
+              private static extern bool ClosePrinter(IntPtr printerHandle);
+
+              [DllImport("winspool.drv", SetLastError = true, CharSet = CharSet.Unicode)]
+              private static extern int StartDocPrinter(
+                  IntPtr printerHandle,
+                  int level,
+                  [In] DocInfo documentInfo);
+
+              [DllImport("winspool.drv", SetLastError = true)]
+              private static extern bool EndDocPrinter(IntPtr printerHandle);
+
+              [DllImport("winspool.drv", SetLastError = true)]
+              private static extern bool StartPagePrinter(IntPtr printerHandle);
+
+              [DllImport("winspool.drv", SetLastError = true)]
+              private static extern bool EndPagePrinter(IntPtr printerHandle);
+
+              [DllImport("winspool.drv", SetLastError = true)]
+              private static extern bool WritePrinter(
+                  IntPtr printerHandle,
+                  byte[] bytes,
+                  int count,
+                  out int written);
+
+              public static void Send(string printerName, byte[] bytes)
+              {
+                  if (!OpenPrinter(printerName, out var handle, IntPtr.Zero))
+                  {
+                      throw new Win32Exception(
+                          Marshal.GetLastWin32Error(),
+                          $"Unable to open printer '{printerName}'.");
+                  }
+
+                  try
+                  {
+                      var document = new DocInfo();
+
+                      if (StartDocPrinter(handle, 1, document) == 0)
+                      {
+                          throw new Win32Exception(Marshal.GetLastWin32Error());
+                      }
+
+                      try
+                      {
+                          if (!StartPagePrinter(handle))
+                          {
+                              throw new Win32Exception(Marshal.GetLastWin32Error());
+                          }
+
+                          try
+                          {
+                              if (!WritePrinter(
+                                  handle,
+                                  bytes,
+                                  bytes.Length,
+                                  out var written))
+                              {
+                                  throw new Win32Exception(Marshal.GetLastWin32Error());
+                              }
+
+                              if (written != bytes.Length)
+                              {
+                                  throw new IOException(
+                                      $"Printer accepted {written} of {bytes.Length} bytes.");
+                              }
+                          }
+                          finally
+                          {
+                              EndPagePrinter(handle);
+                          }
+                      }
+                      finally
+                      {
+                          EndDocPrinter(handle);
+                      }
+                  }
+                  finally
+                  {
+                      ClosePrinter(handle);
+                  }
+              }
+          }
+          '@ | Set-Content -Encoding UTF8 tools/Outfitters.PrinterTool/Program.cs
+
+      - name: Create Windows setup, backup, and restore scripts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          @'
+          param(
+              [string]$InstallPath = "C:\Outfitters",
+              [string]$DatabasePassword = "",
+              [string]$PrinterName = "",
+              [ValidateSet(58, 80)]
+              [int]$PaperWidth = 80
+          )
+
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "OUTFITTERS POS Setup" -ForegroundColor Cyan
+
+          if ([string]::IsNullOrWhiteSpace($DatabasePassword)) {
+              $secure = Read-Host "Create a PostgreSQL password" -AsSecureString
+              $DatabasePassword = [System.Net.NetworkCredential]::new("", $secure).Password
+          }
+
+          New-Item -ItemType Directory -Force -Path $InstallPath | Out-Null
+          New-Item -ItemType Directory -Force -Path "$InstallPath\data\backups" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$InstallPath\logs" | Out-Null
+
+          Copy-Item "$PSScriptRoot\api" "$InstallPath\api" -Recurse -Force
+          Copy-Item "$PSScriptRoot\web" "$InstallPath\web" -Recurse -Force
+          Copy-Item "$PSScriptRoot\printer-tool" "$InstallPath\printer-tool" -Recurse -Force
+          Copy-Item "$PSScriptRoot\scripts" "$InstallPath\scripts" -Recurse -Force
+
+          $settings = @{
+              Culture = "en-PH"
+              CurrencyCode = "PHP"
+              CurrencySymbol = "₱"
+              TimeZone = "Asia/Manila"
+              PrinterName = $PrinterName
+              PaperWidth = $PaperWidth
+              OpenCashDrawer = $true
+          } | ConvertTo-Json
+
+          $settings | Set-Content -Encoding UTF8 "$InstallPath\orms-machine-settings.json"
+
+          Write-Host ""
+          Write-Host "Files installed to $InstallPath" -ForegroundColor Green
+          Write-Host "PostgreSQL must be installed before starting ORMS."
+          Write-Host "Run Configure-Database.ps1 after PostgreSQL installation."
+          Write-Host "Run Test-Printer.ps1 after installing the XPrinter Windows driver."
+          '@ | Set-Content -Encoding UTF8 deployment/windows/Install-ORMs.ps1
+
+          @'
+          param(
+              [string]$PgBin = "C:\Program Files\PostgreSQL\17\bin",
+              [string]$DatabaseName = "outfitters",
+              [string]$DatabaseUser = "outfitters",
+              [string]$BackupFolder = "C:\Outfitters\data\backups",
+              [int]$RetentionDays = 30
+          )
+
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path $BackupFolder | Out-Null
+
+          $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+          $output = Join-Path $BackupFolder "$DatabaseName-$timestamp.dump"
+          $pgDump = Join-Path $PgBin "pg_dump.exe"
+
+          if (-not (Test-Path $pgDump)) {
+              throw "pg_dump.exe was not found at $pgDump"
+          }
+
+          & $pgDump -U $DatabaseUser -d $DatabaseName -F c -f $output
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "PostgreSQL backup failed."
+          }
+
+          Get-ChildItem $BackupFolder -Filter "*.dump" |
+              Where-Object LastWriteTime -lt (Get-Date).AddDays(-$RetentionDays) |
+              Remove-Item -Force
+
+          Write-Host "Backup created: $output" -ForegroundColor Green
+          '@ | Set-Content -Encoding UTF8 deployment/windows/Backup-ORMs.ps1
+
+          @'
+          param(
+              [Parameter(Mandatory = $true)]
+              [string]$BackupFile,
+              [string]$PgBin = "C:\Program Files\PostgreSQL\17\bin",
+              [string]$DatabaseName = "outfitters",
+              [string]$DatabaseUser = "outfitters"
+          )
+
+          $ErrorActionPreference = "Stop"
+
+          if (-not (Test-Path $BackupFile)) {
+              throw "Backup file not found: $BackupFile"
+          }
+
+          $pgRestore = Join-Path $PgBin "pg_restore.exe"
+
+          if (-not (Test-Path $pgRestore)) {
+              throw "pg_restore.exe was not found at $pgRestore"
+          }
+
+          Write-Warning "This will overwrite objects in database '$DatabaseName'."
+          $confirmation = Read-Host "Type RESTORE to continue"
+
+          if ($confirmation -ne "RESTORE") {
+              Write-Host "Restore cancelled."
+              exit 1
+          }
+
+          & $pgRestore -U $DatabaseUser -d $DatabaseName --clean --if-exists $BackupFile
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "PostgreSQL restore failed."
+          }
+
+          Write-Host "Restore completed." -ForegroundColor Green
+          '@ | Set-Content -Encoding UTF8 deployment/windows/Restore-ORMs.ps1
+
+          @'
+          param(
+              [Parameter(Mandatory = $true)]
+              [string]$PrinterName,
+              [ValidateSet(58, 80)]
+              [int]$PaperWidth = 80
+          )
+
+          $ErrorActionPreference = "Stop"
+          $tool = Join-Path $PSScriptRoot "..\printer-tool\Outfitters.PrinterTool.exe"
+
+          if (-not (Test-Path $tool)) {
+              throw "Printer tool not found: $tool"
+          }
+
+          & $tool test $PrinterName $PaperWidth
+
+          if ($LASTEXITCODE -ne 0) {
+              throw "Printer or cash-drawer test failed."
+          }
+          '@ | Set-Content -Encoding UTF8 deployment/windows/Test-Printer.ps1
+
+          @'
+          # OUTFITTERS Windows POS Deployment
+
+          This bundle is configured for:
+
+          - Windows 10 or Windows 11, 64-bit
+          - Philippine Peso (`PHP`, symbol `₱`)
+          - Culture `en-PH`
+          - Timezone `Asia/Manila`
+          - PostgreSQL database
+          - ESC/POS receipt printers
+          - Cash drawers connected through the receipt printer
+
+          ## Installation order
+
+          1. Install PostgreSQL 17 for Windows.
+          2. Install the Windows driver supplied for the exact XPrinter model.
+          3. Connect the cash drawer to the printer's drawer port.
+          4. Run PowerShell as Administrator.
+          5. Run `Install-ORMs.ps1`.
+          6. Configure the database credentials in the API production settings.
+          7. Run the API and web applications.
+          8. Run `Test-Printer.ps1 -PrinterName "Windows Printer Name" -PaperWidth 80`.
+          9. Complete a test sale using sample data before using live transactions.
+
+          ## Hardware limitation
+
+          ESC/POS support is included, but the exact XPrinter driver, code page,
+          cutter behavior, paper width, and cash-drawer pulse must be verified
+          with the physical printer and drawer. The printer name must match the
+          name shown in Windows Settings > Bluetooth & devices > Printers & scanners.
+          '@ | Set-Content -Encoding UTF8 deployment/windows/README-WINDOWS-POS.md
+
+      - name: Restore and test solution
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          dotnet restore OutfittersRetailManagementSystem.sln
+          dotnet build OutfittersRetailManagementSystem.sln --configuration Release --no-restore
+          dotnet test OutfittersRetailManagementSystem.sln --configuration Release --no-build
+
+      - name: Publish Windows applications
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Remove-Item artifacts -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path artifacts/windows-pos/api | Out-Null
+          New-Item -ItemType Directory -Force -Path artifacts/windows-pos/web | Out-Null
+          New-Item -ItemType Directory -Force -Path artifacts/windows-pos/printer-tool | Out-Null
+          New-Item -ItemType Directory -Force -Path artifacts/windows-pos/scripts | Out-Null
+
+          dotnet publish src/Outfitters.API/Outfitters.API.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:PublishTrimmed=false `
+            --output artifacts/windows-pos/api
+
+          dotnet publish src/Outfitters.Web/Outfitters.Web.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:PublishTrimmed=false `
+            --output artifacts/windows-pos/web
+
+          dotnet publish tools/Outfitters.PrinterTool/Outfitters.PrinterTool.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained true `
+            --output artifacts/windows-pos/printer-tool
+
+          Copy-Item deployment/windows/*.ps1 artifacts/windows-pos/scripts -Force
+          Copy-Item deployment/windows/README-WINDOWS-POS.md artifacts/windows-pos -Force
+          Copy-Item deployment/windows/Install-ORMs.ps1 artifacts/windows-pos -Force
+          Copy-Item src/Outfitters.API/appsettings.Production.json artifacts/windows-pos/api -Force
+          Copy-Item src/Outfitters.Web/appsettings.Production.json artifacts/windows-pos/web -Force
+
+          Compress-Archive `
+            -Path artifacts/windows-pos/* `
+            -DestinationPath artifacts/OUTFITTERS-ORMS-Windows-x64.zip `
+            -Force
+
+      - name: Upload Windows POS bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: OUTFITTERS-ORMS-Windows-x64
+          path: artifacts/OUTFITTERS-ORMS-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Commit deployment source files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add `
+            src/Outfitters.API/appsettings.Production.json `
+            src/Outfitters.Web/appsettings.Production.json `
+            tools/Outfitters.PrinterTool `
+            deployment/windows
+
+          if (git diff --cached --quiet) {
+              Write-Host "Deployment source files are already committed."
+              exit 0
+          }
+
+          git commit -m "Add Windows POS deployment bundle and ESC POS tools"
+          git pull --rebase origin main
+          git push origin HEAD:main
