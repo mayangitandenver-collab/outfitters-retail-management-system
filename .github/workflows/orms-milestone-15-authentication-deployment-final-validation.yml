@@ -540,41 +540,60 @@ jobs:
           - Final user-acceptance testing uses sample data first.
           EOF
 
-      - name: Normalize Razor directives
+      - name: Normalize and verify Razor directives
         shell: bash
         run: |
           set -euo pipefail
 
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           razor_root = Path("src/Outfitters.Web")
-          directive_prefixes = (
-              "@page",
-              "@attribute",
-              "@inject",
-              "@using",
-              "@namespace",
-              "@inherits",
-              "@layout",
-              "@implements",
-              "@typeparam",
-              "@rendermode",
+          directive_pattern = re.compile(
+              r"^\s*@(page|attribute|inject|using|namespace|inherits|layout|"
+              r"implements|typeparam|rendermode)\b"
           )
 
           for path in razor_root.rglob("*.razor"):
-              lines = path.read_text().splitlines()
+              raw = path.read_text(encoding="utf-8-sig")
+              lines = raw.splitlines()
               normalized = []
 
               for line in lines:
-                  stripped = line.lstrip()
-
-                  if stripped.startswith(directive_prefixes):
-                      normalized.append(stripped)
+                  if directive_pattern.match(line):
+                      normalized.append(line.lstrip())
                   else:
                       normalized.append(line)
 
-              path.write_text("\n".join(normalized) + "\n")
+              # Put @page directives before other directives to avoid malformed
+              # template files after authorization attributes are inserted.
+              page_lines = [line for line in normalized if line.startswith("@page ")]
+              remaining = [line for line in normalized if not line.startswith("@page ")]
+
+              while remaining and not remaining[0].strip():
+                  remaining.pop(0)
+
+              final_lines = page_lines + remaining
+              path.write_text(
+                  "\n".join(final_lines).rstrip() + "\n",
+                  encoding="utf-8"
+              )
+
+          errors = []
+          for path in razor_root.rglob("*.razor"):
+              for number, line in enumerate(
+                  path.read_text(encoding="utf-8").splitlines(),
+                  start=1
+              ):
+                  if re.match(r"^\s+@(page|attribute|inject|using|namespace|inherits|"
+                              r"layout|implements|typeparam|rendermode)\b", line):
+                      errors.append(f"{path}:{number}: {line!r}")
+
+          if errors:
+              raise SystemExit(
+                  "Indented Razor directives remain:\n" + "\n".join(errors)
+              )
           PY
 
       - name: Restore build and test
