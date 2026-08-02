@@ -1,0 +1,130 @@
+@page "/purchasing/orders/new"
+@attribute [Authorize(Roles = "Administrator,Manager,PurchasingOfficer")]
+@inject IPurchasingApiClient PurchasingApi
+
+<PageTitle>New Purchase Order - OUTFITTERS</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">Procurement</span>
+        <h1>Create Purchase Order</h1>
+        <p>Create a draft purchase order for approval and delivery tracking.</p>
+    </div>
+</div>
+
+<section class="page-card purchasing-form">
+    <div class="form-grid">
+        <label>
+            Supplier ID
+            <input @bind="_supplierIdText" />
+        </label>
+
+        <label>
+            Store ID
+            <input @bind="_storeIdText" />
+        </label>
+    </div>
+
+    <div class="form-grid">
+        <label>
+            Product Variant ID
+            <input @bind="_productVariantIdText" />
+        </label>
+
+        <label>
+            Expected Delivery
+            <InputDate @bind-Value="_expectedDelivery" />
+        </label>
+    </div>
+
+    <div class="form-grid">
+        <label>
+            Quantity
+            <input type="number" min="1" step="1" @bind="_quantity" />
+        </label>
+
+        <label>
+            Unit Cost
+            <input type="number" min="0" step="0.01" @bind="_unitCost" />
+        </label>
+    </div>
+
+    <label>
+        Notes
+        <textarea rows="4" @bind="_notes"></textarea>
+    </label>
+
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="@(_success ? "success-message" : "error-message")">
+            @_message
+        </div>
+    }
+
+    <button
+        type="button"
+        class="primary-button"
+        disabled="@_submitting"
+        @onclick="SubmitAsync">
+        @(_submitting ? "Creating..." : "Create Purchase Order")
+    </button>
+</section>
+
+@code {
+    private string _supplierIdText = string.Empty;
+    private string _storeIdText = string.Empty;
+    private string _productVariantIdText = string.Empty;
+    private decimal _quantity = 1m;
+    private decimal _unitCost;
+    private DateTime _expectedDelivery = DateTime.Today.AddDays(7);
+    private string _notes = string.Empty;
+    private string? _message;
+    private bool _success;
+    private bool _submitting;
+
+    private async Task SubmitAsync()
+    {
+        _message = null;
+        _success = false;
+
+        if (!Guid.TryParse(_supplierIdText, out var supplierId) ||
+            !Guid.TryParse(_storeIdText, out var storeId) ||
+            !Guid.TryParse(_productVariantIdText, out var productVariantId))
+        {
+            _message = "Enter valid supplier, store, and product variant IDs.";
+            return;
+        }
+
+        if (_quantity <= 0m)
+        {
+            _message = "Quantity must be greater than zero.";
+            return;
+        }
+
+        _submitting = true;
+
+        _success = await PurchasingApi.CreatePurchaseOrderAsync(
+            new CreatePurchaseOrderRequest
+            {
+                SupplierId = supplierId,
+                StoreId = storeId,
+                ExpectedDeliveryDateUtc =
+                    _expectedDelivery.ToUniversalTime(),
+                Notes = _notes,
+                Lines = new[]
+                {
+                    new CreatePurchaseOrderLineRequest
+                    {
+                        ProductVariantId = productVariantId,
+                        Quantity = _quantity,
+                        UnitCost = _unitCost
+                    }
+                }
+            });
+
+        _submitting = false;
+        _message = _success
+            ? "Purchase order created successfully."
+            : "The purchase order could not be created.";
+    }
+}
