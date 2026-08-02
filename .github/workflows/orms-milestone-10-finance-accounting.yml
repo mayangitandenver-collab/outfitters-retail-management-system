@@ -1,0 +1,769 @@
+name: ORMS Milestone 10 - Finance and Accounting
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  milestone10:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Write accounting domain model
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p src/Outfitters.Domain/Entities
+          mkdir -p src/Outfitters.Domain/Enums
+          mkdir -p src/Outfitters.Application/Accounting
+          mkdir -p src/Outfitters.API/Controllers
+
+          cat > src/Outfitters.Domain/Enums/AccountType.cs <<'EOF'
+          namespace Outfitters.Domain.Enums;
+
+          public enum AccountType
+          {
+              Asset = 1,
+              Liability = 2,
+              Equity = 3,
+              Revenue = 4,
+              Expense = 5
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Enums/JournalEntryStatus.cs <<'EOF'
+          namespace Outfitters.Domain.Enums;
+
+          public enum JournalEntryStatus
+          {
+              Draft = 1,
+              Posted = 2,
+              Reversed = 3,
+              Cancelled = 4
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Enums/PayableStatus.cs <<'EOF'
+          namespace Outfitters.Domain.Enums;
+
+          public enum PayableStatus
+          {
+              Open = 1,
+              PartiallyPaid = 2,
+              Paid = 3,
+              Cancelled = 4
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Enums/ReceivableStatus.cs <<'EOF'
+          namespace Outfitters.Domain.Enums;
+
+          public enum ReceivableStatus
+          {
+              Open = 1,
+              PartiallyPaid = 2,
+              Paid = 3,
+              WrittenOff = 4,
+              Cancelled = 5
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/GeneralLedgerAccount.cs <<'EOF'
+          using Outfitters.Domain.Common;
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class GeneralLedgerAccount : BaseEntity
+          {
+              public string AccountCode { get; set; } = string.Empty;
+              public string AccountName { get; set; } = string.Empty;
+              public AccountType AccountType { get; set; }
+              public Guid? ParentAccountId { get; set; }
+              public GeneralLedgerAccount? ParentAccount { get; set; }
+              public bool IsPostingAccount { get; set; } = true;
+              public bool IsActive { get; set; } = true;
+              public ICollection<GeneralLedgerAccount> ChildAccounts { get; set; } =
+                  new List<GeneralLedgerAccount>();
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/JournalEntry.cs <<'EOF'
+          using Outfitters.Domain.Common;
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class JournalEntry : BaseEntity
+          {
+              public string EntryNumber { get; set; } = string.Empty;
+              public DateTime EntryDateUtc { get; set; } = DateTime.UtcNow;
+              public string Description { get; set; } = string.Empty;
+              public string? ReferenceNumber { get; set; }
+              public JournalEntryStatus Status { get; set; } = JournalEntryStatus.Draft;
+              public Guid? StoreId { get; set; }
+              public Store? Store { get; set; }
+              public Guid CreatedByUserId { get; set; }
+              public ApplicationUser CreatedByUser { get; set; } = null!;
+              public Guid? PostedByUserId { get; set; }
+              public ApplicationUser? PostedByUser { get; set; }
+              public DateTime? PostedAtUtc { get; set; }
+              public ICollection<JournalEntryLine> Lines { get; set; } =
+                  new List<JournalEntryLine>();
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/JournalEntryLine.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class JournalEntryLine : BaseEntity
+          {
+              public Guid JournalEntryId { get; set; }
+              public JournalEntry JournalEntry { get; set; } = null!;
+              public Guid GeneralLedgerAccountId { get; set; }
+              public GeneralLedgerAccount GeneralLedgerAccount { get; set; } = null!;
+              public string? Description { get; set; }
+              public decimal DebitAmount { get; set; }
+              public decimal CreditAmount { get; set; }
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/AccountsPayable.cs <<'EOF'
+          using Outfitters.Domain.Common;
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class AccountsPayable : BaseEntity
+          {
+              public string PayableNumber { get; set; } = string.Empty;
+              public Guid SupplierId { get; set; }
+              public Supplier Supplier { get; set; } = null!;
+              public Guid? PurchaseOrderId { get; set; }
+              public PurchaseOrder? PurchaseOrder { get; set; }
+              public DateTime InvoiceDateUtc { get; set; }
+              public DateTime DueDateUtc { get; set; }
+              public decimal OriginalAmount { get; set; }
+              public decimal PaidAmount { get; set; }
+              public decimal BalanceAmount { get; set; }
+              public PayableStatus Status { get; set; } = PayableStatus.Open;
+              public string? SupplierInvoiceNumber { get; set; }
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/AccountsReceivable.cs <<'EOF'
+          using Outfitters.Domain.Common;
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class AccountsReceivable : BaseEntity
+          {
+              public string ReceivableNumber { get; set; } = string.Empty;
+              public Guid? CustomerId { get; set; }
+              public Customer? Customer { get; set; }
+              public Guid? SaleId { get; set; }
+              public Sale? Sale { get; set; }
+              public DateTime InvoiceDateUtc { get; set; }
+              public DateTime DueDateUtc { get; set; }
+              public decimal OriginalAmount { get; set; }
+              public decimal CollectedAmount { get; set; }
+              public decimal BalanceAmount { get; set; }
+              public ReceivableStatus Status { get; set; } = ReceivableStatus.Open;
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/ExpenseRecord.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class ExpenseRecord : BaseEntity
+          {
+              public string ExpenseNumber { get; set; } = string.Empty;
+              public Guid StoreId { get; set; }
+              public Store Store { get; set; } = null!;
+              public Guid ExpenseAccountId { get; set; }
+              public GeneralLedgerAccount ExpenseAccount { get; set; } = null!;
+              public DateTime ExpenseDateUtc { get; set; } = DateTime.UtcNow;
+              public decimal Amount { get; set; }
+              public decimal TaxAmount { get; set; }
+              public string Description { get; set; } = string.Empty;
+              public string? ReferenceNumber { get; set; }
+              public Guid CreatedByUserId { get; set; }
+              public ApplicationUser CreatedByUser { get; set; } = null!;
+          }
+          EOF
+
+      - name: Write accounting contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Application/Accounting/AccountingContracts.cs <<'EOF'
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Application.Accounting;
+
+          public sealed record CreateLedgerAccountRequest(
+              string AccountCode,
+              string AccountName,
+              AccountType AccountType,
+              Guid? ParentAccountId,
+              bool IsPostingAccount);
+
+          public sealed record JournalEntryLineRequest(
+              Guid GeneralLedgerAccountId,
+              string? Description,
+              decimal DebitAmount,
+              decimal CreditAmount);
+
+          public sealed record CreateJournalEntryRequest(
+              DateTime EntryDateUtc,
+              string Description,
+              string? ReferenceNumber,
+              Guid? StoreId,
+              IReadOnlyCollection<JournalEntryLineRequest> Lines);
+
+          public sealed record CreateExpenseRequest(
+              Guid StoreId,
+              Guid ExpenseAccountId,
+              DateTime ExpenseDateUtc,
+              decimal Amount,
+              decimal TaxAmount,
+              string Description,
+              string? ReferenceNumber);
+
+          public sealed record RecordPayablePaymentRequest(
+              decimal Amount,
+              string? ReferenceNumber);
+
+          public sealed record RecordReceivableCollectionRequest(
+              decimal Amount,
+              string? ReferenceNumber);
+          EOF
+
+      - name: Extend database context for accounting
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("src/Outfitters.Infrastructure/Persistence/ApplicationDbContext.cs")
+          text = path.read_text()
+
+          dbsets = """              public DbSet<GeneralLedgerAccount> GeneralLedgerAccounts => Set<GeneralLedgerAccount>();
+              public DbSet<JournalEntry> JournalEntries => Set<JournalEntry>();
+              public DbSet<JournalEntryLine> JournalEntryLines => Set<JournalEntryLine>();
+              public DbSet<AccountsPayable> AccountsPayables => Set<AccountsPayable>();
+              public DbSet<AccountsReceivable> AccountsReceivables => Set<AccountsReceivable>();
+              public DbSet<ExpenseRecord> ExpenseRecords => Set<ExpenseRecord>();
+
+"""
+
+          if "DbSet<GeneralLedgerAccount>" not in text:
+              method_index = text.find("protected override void OnModelCreating")
+              if method_index == -1:
+                  raise SystemExit("OnModelCreating method not found")
+              text = text[:method_index] + dbsets + text[method_index:]
+
+          config = """
+                  builder.Entity<GeneralLedgerAccount>(entity =>
+                  {
+                      entity.HasIndex(x => x.AccountCode).IsUnique();
+                      entity.Property(x => x.AccountCode).HasMaxLength(30).IsRequired();
+                      entity.Property(x => x.AccountName).HasMaxLength(200).IsRequired();
+                      entity.HasOne(x => x.ParentAccount).WithMany(x => x.ChildAccounts)
+                          .HasForeignKey(x => x.ParentAccountId).OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<JournalEntry>(entity =>
+                  {
+                      entity.HasIndex(x => x.EntryNumber).IsUnique();
+                      entity.Property(x => x.EntryNumber).HasMaxLength(50).IsRequired();
+                      entity.Property(x => x.Description).HasMaxLength(500).IsRequired();
+                      entity.HasOne(x => x.Store).WithMany()
+                          .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.SetNull);
+                      entity.HasOne(x => x.CreatedByUser).WithMany()
+                          .HasForeignKey(x => x.CreatedByUserId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.PostedByUser).WithMany()
+                          .HasForeignKey(x => x.PostedByUserId).OnDelete(DeleteBehavior.SetNull);
+                  });
+
+                  builder.Entity<JournalEntryLine>(entity =>
+                  {
+                      entity.Property(x => x.DebitAmount).HasPrecision(18, 2);
+                      entity.Property(x => x.CreditAmount).HasPrecision(18, 2);
+                      entity.HasOne(x => x.JournalEntry).WithMany(x => x.Lines)
+                          .HasForeignKey(x => x.JournalEntryId).OnDelete(DeleteBehavior.Cascade);
+                      entity.HasOne(x => x.GeneralLedgerAccount).WithMany()
+                          .HasForeignKey(x => x.GeneralLedgerAccountId).OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<AccountsPayable>(entity =>
+                  {
+                      entity.HasIndex(x => x.PayableNumber).IsUnique();
+                      entity.Property(x => x.PayableNumber).HasMaxLength(50).IsRequired();
+                      entity.Property(x => x.OriginalAmount).HasPrecision(18, 2);
+                      entity.Property(x => x.PaidAmount).HasPrecision(18, 2);
+                      entity.Property(x => x.BalanceAmount).HasPrecision(18, 2);
+                      entity.HasOne(x => x.Supplier).WithMany()
+                          .HasForeignKey(x => x.SupplierId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.PurchaseOrder).WithMany()
+                          .HasForeignKey(x => x.PurchaseOrderId).OnDelete(DeleteBehavior.SetNull);
+                  });
+
+                  builder.Entity<AccountsReceivable>(entity =>
+                  {
+                      entity.HasIndex(x => x.ReceivableNumber).IsUnique();
+                      entity.Property(x => x.ReceivableNumber).HasMaxLength(50).IsRequired();
+                      entity.Property(x => x.OriginalAmount).HasPrecision(18, 2);
+                      entity.Property(x => x.CollectedAmount).HasPrecision(18, 2);
+                      entity.Property(x => x.BalanceAmount).HasPrecision(18, 2);
+                      entity.HasOne(x => x.Customer).WithMany()
+                          .HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.SetNull);
+                      entity.HasOne(x => x.Sale).WithMany()
+                          .HasForeignKey(x => x.SaleId).OnDelete(DeleteBehavior.SetNull);
+                  });
+
+                  builder.Entity<ExpenseRecord>(entity =>
+                  {
+                      entity.HasIndex(x => x.ExpenseNumber).IsUnique();
+                      entity.Property(x => x.ExpenseNumber).HasMaxLength(50).IsRequired();
+                      entity.Property(x => x.Amount).HasPrecision(18, 2);
+                      entity.Property(x => x.TaxAmount).HasPrecision(18, 2);
+                      entity.Property(x => x.Description).HasMaxLength(500).IsRequired();
+                      entity.HasOne(x => x.Store).WithMany()
+                          .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.ExpenseAccount).WithMany()
+                          .HasForeignKey(x => x.ExpenseAccountId).OnDelete(DeleteBehavior.Restrict);
+                      entity.HasOne(x => x.CreatedByUser).WithMany()
+                          .HasForeignKey(x => x.CreatedByUserId).OnDelete(DeleteBehavior.Restrict);
+                  });
+"""
+
+          if "builder.Entity<GeneralLedgerAccount>" not in text:
+              method_match = re.search(
+                  r"protected\s+override\s+void\s+OnModelCreating\s*\([^)]*\)\s*\{",
+                  text
+              )
+              if not method_match:
+                  raise SystemExit("OnModelCreating opening brace not found")
+
+              opening_brace = text.find("{", method_match.start())
+              depth = 0
+              closing_brace = None
+
+              for index in range(opening_brace, len(text)):
+                  char = text[index]
+                  if char == "{":
+                      depth += 1
+                  elif char == "}":
+                      depth -= 1
+                      if depth == 0:
+                          closing_brace = index
+                          break
+
+              if closing_brace is None:
+                  raise SystemExit("OnModelCreating closing brace not found")
+
+              text = text[:closing_brace] + config + text[closing_brace:]
+
+          path.write_text(text)
+          PY
+
+      - name: Write accounting controller
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.API/Controllers/AccountingController.cs <<'EOF'
+          using System.Globalization;
+          using System.Security.Claims;
+          using Microsoft.AspNetCore.Authorization;
+          using Microsoft.AspNetCore.Mvc;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Application.Accounting;
+          using Outfitters.Domain.Entities;
+          using Outfitters.Domain.Enums;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.API.Controllers;
+
+          [ApiController]
+          [Authorize(Roles = "SuperAdministrator,Administrator,Accountant,Auditor")]
+          [Route("api/accounting")]
+          public sealed class AccountingController : ControllerBase
+          {
+              private readonly ApplicationDbContext _db;
+
+              public AccountingController(ApplicationDbContext db) => _db = db;
+
+              [HttpGet("accounts")]
+              public async Task<IActionResult> GetAccounts()
+              {
+                  var result = await _db.GeneralLedgerAccounts
+                      .AsNoTracking()
+                      .OrderBy(x => x.AccountCode)
+                      .Select(x => new
+                      {
+                          x.Id,
+                          x.AccountCode,
+                          x.AccountName,
+                          x.AccountType,
+                          x.ParentAccountId,
+                          x.IsPostingAccount,
+                          x.IsActive
+                      })
+                      .ToListAsync();
+
+                  return Ok(result);
+              }
+
+              [HttpPost("accounts")]
+              public async Task<IActionResult> CreateAccount(
+                  CreateLedgerAccountRequest request)
+              {
+                  if (string.IsNullOrWhiteSpace(request.AccountCode) ||
+                      string.IsNullOrWhiteSpace(request.AccountName))
+                  {
+                      return BadRequest("Account code and name are required.");
+                  }
+
+                  if (await _db.GeneralLedgerAccounts.AnyAsync(x =>
+                      x.AccountCode == request.AccountCode.Trim()))
+                  {
+                      return Conflict("Account code already exists.");
+                  }
+
+                  var account = new GeneralLedgerAccount
+                  {
+                      AccountCode = request.AccountCode.Trim(),
+                      AccountName = request.AccountName.Trim(),
+                      AccountType = request.AccountType,
+                      ParentAccountId = request.ParentAccountId,
+                      IsPostingAccount = request.IsPostingAccount
+                  };
+
+                  _db.GeneralLedgerAccounts.Add(account);
+                  await _db.SaveChangesAsync();
+
+                  return Ok(account);
+              }
+
+              [HttpPost("journal-entries")]
+              public async Task<IActionResult> CreateJournalEntry(
+                  CreateJournalEntryRequest request)
+              {
+                  if (request.Lines.Count < 2)
+                  {
+                      return BadRequest("At least two journal lines are required.");
+                  }
+
+                  var debitTotal = request.Lines.Sum(x => x.DebitAmount);
+                  var creditTotal = request.Lines.Sum(x => x.CreditAmount);
+
+                  if (debitTotal <= 0 || debitTotal != creditTotal)
+                  {
+                      return BadRequest("Journal entry debits and credits must balance.");
+                  }
+
+                  foreach (var line in request.Lines)
+                  {
+                      if (line.DebitAmount < 0 ||
+                          line.CreditAmount < 0 ||
+                          (line.DebitAmount > 0 && line.CreditAmount > 0))
+                      {
+                          return BadRequest("Each line must contain either a debit or credit.");
+                      }
+
+                      if (!await _db.GeneralLedgerAccounts.AnyAsync(x =>
+                          x.Id == line.GeneralLedgerAccountId &&
+                          x.IsActive &&
+                          x.IsPostingAccount))
+                      {
+                          return BadRequest("A posting account was not found.");
+                      }
+                  }
+
+                  var entry = new JournalEntry
+                  {
+                      EntryNumber = await GenerateEntryNumber(),
+                      EntryDateUtc = request.EntryDateUtc,
+                      Description = request.Description.Trim(),
+                      ReferenceNumber = request.ReferenceNumber?.Trim(),
+                      StoreId = request.StoreId,
+                      CreatedByUserId = GetUserId()
+                  };
+
+                  foreach (var line in request.Lines)
+                  {
+                      entry.Lines.Add(new JournalEntryLine
+                      {
+                          GeneralLedgerAccountId = line.GeneralLedgerAccountId,
+                          Description = line.Description?.Trim(),
+                          DebitAmount = line.DebitAmount,
+                          CreditAmount = line.CreditAmount
+                      });
+                  }
+
+                  _db.JournalEntries.Add(entry);
+                  await _db.SaveChangesAsync();
+
+                  return Ok(new
+                  {
+                      entry.Id,
+                      entry.EntryNumber,
+                      DebitTotal = debitTotal,
+                      CreditTotal = creditTotal,
+                      entry.Status
+                  });
+              }
+
+              [HttpPost("journal-entries/{id:guid}/post")]
+              public async Task<IActionResult> PostJournalEntry(Guid id)
+              {
+                  var entry = await _db.JournalEntries
+                      .Include(x => x.Lines)
+                      .SingleOrDefaultAsync(x => x.Id == id);
+
+                  if (entry is null)
+                  {
+                      return NotFound();
+                  }
+
+                  if (entry.Status != JournalEntryStatus.Draft)
+                  {
+                      return BadRequest("Only draft journal entries can be posted.");
+                  }
+
+                  if (entry.Lines.Sum(x => x.DebitAmount) !=
+                      entry.Lines.Sum(x => x.CreditAmount))
+                  {
+                      return BadRequest("Journal entry is not balanced.");
+                  }
+
+                  entry.Status = JournalEntryStatus.Posted;
+                  entry.PostedByUserId = GetUserId();
+                  entry.PostedAtUtc = DateTime.UtcNow;
+                  entry.UpdatedAtUtc = DateTime.UtcNow;
+
+                  await _db.SaveChangesAsync();
+                  return NoContent();
+              }
+
+              [HttpPost("expenses")]
+              public async Task<IActionResult> CreateExpense(CreateExpenseRequest request)
+              {
+                  if (request.Amount <= 0 || request.TaxAmount < 0)
+                  {
+                      return BadRequest("Expense amount is invalid.");
+                  }
+
+                  var expense = new ExpenseRecord
+                  {
+                      ExpenseNumber = await GenerateExpenseNumber(),
+                      StoreId = request.StoreId,
+                      ExpenseAccountId = request.ExpenseAccountId,
+                      ExpenseDateUtc = request.ExpenseDateUtc,
+                      Amount = request.Amount,
+                      TaxAmount = request.TaxAmount,
+                      Description = request.Description.Trim(),
+                      ReferenceNumber = request.ReferenceNumber?.Trim(),
+                      CreatedByUserId = GetUserId()
+                  };
+
+                  _db.ExpenseRecords.Add(expense);
+                  await _db.SaveChangesAsync();
+
+                  return Ok(expense);
+              }
+
+              [HttpGet("trial-balance")]
+              public async Task<IActionResult> TrialBalance(
+                  [FromQuery] DateTime? fromUtc,
+                  [FromQuery] DateTime? toUtc)
+              {
+                  var query = _db.JournalEntryLines
+                      .AsNoTracking()
+                      .Where(x => x.JournalEntry.Status == JournalEntryStatus.Posted);
+
+                  if (fromUtc.HasValue)
+                  {
+                      query = query.Where(x =>
+                          x.JournalEntry.EntryDateUtc >= fromUtc.Value);
+                  }
+
+                  if (toUtc.HasValue)
+                  {
+                      query = query.Where(x =>
+                          x.JournalEntry.EntryDateUtc <= toUtc.Value);
+                  }
+
+                  var result = await query
+                      .GroupBy(x => new
+                      {
+                          x.GeneralLedgerAccountId,
+                          x.GeneralLedgerAccount.AccountCode,
+                          x.GeneralLedgerAccount.AccountName,
+                          x.GeneralLedgerAccount.AccountType
+                      })
+                      .Select(group => new
+                      {
+                          group.Key.GeneralLedgerAccountId,
+                          group.Key.AccountCode,
+                          group.Key.AccountName,
+                          group.Key.AccountType,
+                          Debit = group.Sum(x => x.DebitAmount),
+                          Credit = group.Sum(x => x.CreditAmount),
+                          Balance = group.Sum(x => x.DebitAmount - x.CreditAmount)
+                      })
+                      .OrderBy(x => x.AccountCode)
+                      .ToListAsync();
+
+                  return Ok(result);
+              }
+
+              [HttpGet("income-statement")]
+              public async Task<IActionResult> IncomeStatement(
+                  [FromQuery] DateTime fromUtc,
+                  [FromQuery] DateTime toUtc)
+              {
+                  var lines = _db.JournalEntryLines
+                      .AsNoTracking()
+                      .Where(x =>
+                          x.JournalEntry.Status == JournalEntryStatus.Posted &&
+                          x.JournalEntry.EntryDateUtc >= fromUtc &&
+                          x.JournalEntry.EntryDateUtc <= toUtc);
+
+                  var revenue = await lines
+                      .Where(x => x.GeneralLedgerAccount.AccountType == AccountType.Revenue)
+                      .SumAsync(x => (decimal?)(x.CreditAmount - x.DebitAmount)) ?? 0m;
+
+                  var expenses = await lines
+                      .Where(x => x.GeneralLedgerAccount.AccountType == AccountType.Expense)
+                      .SumAsync(x => (decimal?)(x.DebitAmount - x.CreditAmount)) ?? 0m;
+
+                  return Ok(new
+                  {
+                      FromUtc = fromUtc,
+                      ToUtc = toUtc,
+                      Revenue = revenue,
+                      Expenses = expenses,
+                      NetIncome = revenue - expenses
+                  });
+              }
+
+              [HttpGet("balance-sheet")]
+              public async Task<IActionResult> BalanceSheet([FromQuery] DateTime asOfUtc)
+              {
+                  var lines = _db.JournalEntryLines
+                      .AsNoTracking()
+                      .Where(x =>
+                          x.JournalEntry.Status == JournalEntryStatus.Posted &&
+                          x.JournalEntry.EntryDateUtc <= asOfUtc);
+
+                  var assets = await lines
+                      .Where(x => x.GeneralLedgerAccount.AccountType == AccountType.Asset)
+                      .SumAsync(x => (decimal?)(x.DebitAmount - x.CreditAmount)) ?? 0m;
+
+                  var liabilities = await lines
+                      .Where(x => x.GeneralLedgerAccount.AccountType == AccountType.Liability)
+                      .SumAsync(x => (decimal?)(x.CreditAmount - x.DebitAmount)) ?? 0m;
+
+                  var equity = await lines
+                      .Where(x => x.GeneralLedgerAccount.AccountType == AccountType.Equity)
+                      .SumAsync(x => (decimal?)(x.CreditAmount - x.DebitAmount)) ?? 0m;
+
+                  return Ok(new
+                  {
+                      AsOfUtc = asOfUtc,
+                      Assets = assets,
+                      Liabilities = liabilities,
+                      Equity = equity,
+                      LiabilitiesAndEquity = liabilities + equity,
+                      IsBalanced = assets == liabilities + equity
+                  });
+              }
+
+              private Guid GetUserId()
+              {
+                  var value = User.FindFirstValue(ClaimTypes.NameIdentifier);
+                  return Guid.TryParse(value, out var id)
+                      ? id
+                      : throw new UnauthorizedAccessException(
+                          "User identifier is missing.");
+              }
+
+              private async Task<string> GenerateEntryNumber()
+              {
+                  var date = DateTime.UtcNow.ToString(
+                      "yyyyMMdd",
+                      CultureInfo.InvariantCulture);
+                  var count = await _db.JournalEntries.CountAsync(x =>
+                      x.CreatedAtUtc.Date == DateTime.UtcNow.Date);
+                  return $"JE-{date}-{count + 1:00000}";
+              }
+
+              private async Task<string> GenerateExpenseNumber()
+              {
+                  var date = DateTime.UtcNow.ToString(
+                      "yyyyMMdd",
+                      CultureInfo.InvariantCulture);
+                  var count = await _db.ExpenseRecords.CountAsync(x =>
+                      x.CreatedAtUtc.Date == DateTime.UtcNow.Date);
+                  return $"EXP-{date}-{count + 1:00000}";
+              }
+          }
+          EOF
+
+      - name: Compile before migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore OutfittersRetailManagementSystem.sln
+          dotnet build OutfittersRetailManagementSystem.sln --configuration Release --no-restore
+
+      - name: Create EF Core migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet tool install --global dotnet-ef --version 9.0.*
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          dotnet ef migrations add AddFinanceAndAccounting \
+            --project src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj \
+            --startup-project src/Outfitters.API/Outfitters.API.csproj \
+            --output-dir Persistence/Migrations
+
+      - name: Build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet build OutfittersRetailManagementSystem.sln --configuration Release
+          dotnet test OutfittersRetailManagementSystem.sln --configuration Release --no-build
+
+      - name: Commit milestone 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src tests OutfittersRetailManagementSystem.sln Directory.Build.props docker-compose.yml global.json README.md .gitignore
+          git commit -m "Milestone 10 - Add finance and accounting foundation"
+          git push
