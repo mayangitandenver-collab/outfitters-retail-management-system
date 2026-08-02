@@ -1,0 +1,1420 @@
+name: ORMS Milestone 14 - Web POS and Admin Dashboard
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  milestone14:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Write POS and administration models
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p src/Outfitters.Web/Models
+          mkdir -p src/Outfitters.Web/Services
+          mkdir -p src/Outfitters.Web/Components/Shared
+          mkdir -p src/Outfitters.Web/Components/Pages
+          mkdir -p src/Outfitters.Web/wwwroot/css
+
+          cat > src/Outfitters.Web/Models/PosModels.cs <<'EOF'
+          namespace Outfitters.Web.Models;
+
+          public sealed class PosProduct
+          {
+              public Guid ProductVariantId { get; set; }
+              public string ProductName { get; set; } = string.Empty;
+              public string VariantName { get; set; } = string.Empty;
+              public string Barcode { get; set; } = string.Empty;
+              public decimal UnitPrice { get; set; }
+              public decimal AvailableQuantity { get; set; }
+          }
+
+          public sealed class PosCartItem
+          {
+              public Guid ProductVariantId { get; set; }
+              public string ProductName { get; set; } = string.Empty;
+              public string VariantName { get; set; } = string.Empty;
+              public decimal UnitPrice { get; set; }
+              public decimal Quantity { get; set; } = 1m;
+              public decimal DiscountAmount { get; set; }
+              public decimal LineTotal =>
+                  Math.Max(0m, UnitPrice * Quantity - DiscountAmount);
+          }
+
+          public sealed class CheckoutPayment
+          {
+              public string Method { get; set; } = "Cash";
+              public decimal Amount { get; set; }
+              public string? ReferenceNumber { get; set; }
+          }
+
+          public sealed class CreateSaleRequest
+          {
+              public Guid StoreId { get; set; }
+              public Guid? CustomerId { get; set; }
+              public IReadOnlyCollection<CreateSaleLineRequest> Items { get; set; } =
+                  Array.Empty<CreateSaleLineRequest>();
+              public IReadOnlyCollection<CheckoutPayment> Payments { get; set; } =
+                  Array.Empty<CheckoutPayment>();
+          }
+
+          public sealed class CreateSaleLineRequest
+          {
+              public Guid ProductVariantId { get; set; }
+              public decimal Quantity { get; set; }
+              public decimal UnitPrice { get; set; }
+              public decimal DiscountAmount { get; set; }
+          }
+
+          public sealed class SaleResult
+          {
+              public Guid Id { get; set; }
+              public string ReceiptNumber { get; set; } = string.Empty;
+              public decimal GrandTotal { get; set; }
+          }
+          EOF
+
+          cat > src/Outfitters.Web/Models/AdminModels.cs <<'EOF'
+          namespace Outfitters.Web.Models;
+
+          public sealed class ProductListItem
+          {
+              public Guid Id { get; set; }
+              public string Name { get; set; } = string.Empty;
+              public string CategoryName { get; set; } = string.Empty;
+              public bool IsActive { get; set; }
+          }
+
+          public sealed class InventoryListItem
+          {
+              public Guid ProductVariantId { get; set; }
+              public string ProductName { get; set; } = string.Empty;
+              public string VariantName { get; set; } = string.Empty;
+              public decimal QuantityOnHand { get; set; }
+              public decimal ReorderLevel { get; set; }
+              public string StoreName { get; set; } = string.Empty;
+              public bool IsLowStock => QuantityOnHand <= ReorderLevel;
+          }
+
+          public sealed class CustomerListItem
+          {
+              public Guid Id { get; set; }
+              public string FullName { get; set; } = string.Empty;
+              public string? Email { get; set; }
+              public string? PhoneNumber { get; set; }
+              public decimal LoyaltyPoints { get; set; }
+              public string TierName { get; set; } = string.Empty;
+          }
+
+          public sealed class EmployeeListItem
+          {
+              public Guid Id { get; set; }
+              public string FullName { get; set; } = string.Empty;
+              public string Email { get; set; } = string.Empty;
+              public string RoleName { get; set; } = string.Empty;
+              public bool IsActive { get; set; }
+          }
+
+          public sealed class StoreListItem
+          {
+              public Guid Id { get; set; }
+              public string Name { get; set; } = string.Empty;
+              public string Code { get; set; } = string.Empty;
+          }
+          EOF
+
+      - name: Extend API client for POS and admin pages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Services/RetailApiClient.cs <<'EOF'
+          using System.Net.Http.Json;
+          using Outfitters.Web.Models;
+
+          namespace Outfitters.Web.Services;
+
+          public interface IRetailApiClient
+          {
+              Task<IReadOnlyCollection<PosProduct>> SearchProductsAsync(
+                  string query,
+                  Guid? storeId,
+                  CancellationToken cancellationToken = default);
+
+              Task<SaleResult?> CreateSaleAsync(
+                  CreateSaleRequest request,
+                  CancellationToken cancellationToken = default);
+
+              Task<IReadOnlyCollection<ProductListItem>> GetProductsAsync(
+                  CancellationToken cancellationToken = default);
+
+              Task<IReadOnlyCollection<InventoryListItem>> GetInventoryAsync(
+                  Guid? storeId,
+                  CancellationToken cancellationToken = default);
+
+              Task<IReadOnlyCollection<CustomerListItem>> GetCustomersAsync(
+                  string? search,
+                  CancellationToken cancellationToken = default);
+
+              Task<IReadOnlyCollection<EmployeeListItem>> GetEmployeesAsync(
+                  CancellationToken cancellationToken = default);
+
+              Task<IReadOnlyCollection<StoreListItem>> GetStoresAsync(
+                  CancellationToken cancellationToken = default);
+          }
+
+          public sealed class RetailApiClient : IRetailApiClient
+          {
+              private readonly HttpClient _httpClient;
+
+              public RetailApiClient(HttpClient httpClient)
+              {
+                  _httpClient = httpClient;
+              }
+
+              public async Task<IReadOnlyCollection<PosProduct>> SearchProductsAsync(
+                  string query,
+                  Guid? storeId,
+                  CancellationToken cancellationToken = default)
+              {
+                  var storePart = storeId.HasValue
+                      ? $"&storeId={storeId.Value}"
+                      : string.Empty;
+
+                  return await SafeGetAsync<PosProduct>(
+                      $"/api/catalog/search?query={Uri.EscapeDataString(query)}{storePart}",
+                      cancellationToken);
+              }
+
+              public async Task<SaleResult?> CreateSaleAsync(
+                  CreateSaleRequest request,
+                  CancellationToken cancellationToken = default)
+              {
+                  using var response = await _httpClient.PostAsJsonAsync(
+                      "/api/sales",
+                      request,
+                      cancellationToken);
+
+                  if (!response.IsSuccessStatusCode)
+                  {
+                      return null;
+                  }
+
+                  return await response.Content.ReadFromJsonAsync<SaleResult>(
+                      cancellationToken: cancellationToken);
+              }
+
+              public Task<IReadOnlyCollection<ProductListItem>> GetProductsAsync(
+                  CancellationToken cancellationToken = default) =>
+                  SafeGetAsync<ProductListItem>(
+                      "/api/products",
+                      cancellationToken);
+
+              public Task<IReadOnlyCollection<InventoryListItem>> GetInventoryAsync(
+                  Guid? storeId,
+                  CancellationToken cancellationToken = default)
+              {
+                  var path = storeId.HasValue
+                      ? $"/api/inventory?storeId={storeId.Value}"
+                      : "/api/inventory";
+
+                  return SafeGetAsync<InventoryListItem>(
+                      path,
+                      cancellationToken);
+              }
+
+              public Task<IReadOnlyCollection<CustomerListItem>> GetCustomersAsync(
+                  string? search,
+                  CancellationToken cancellationToken = default)
+              {
+                  var path = string.IsNullOrWhiteSpace(search)
+                      ? "/api/customers"
+                      : $"/api/customers?search={Uri.EscapeDataString(search)}";
+
+                  return SafeGetAsync<CustomerListItem>(
+                      path,
+                      cancellationToken);
+              }
+
+              public Task<IReadOnlyCollection<EmployeeListItem>> GetEmployeesAsync(
+                  CancellationToken cancellationToken = default) =>
+                  SafeGetAsync<EmployeeListItem>(
+                      "/api/employees",
+                      cancellationToken);
+
+              public Task<IReadOnlyCollection<StoreListItem>> GetStoresAsync(
+                  CancellationToken cancellationToken = default) =>
+                  SafeGetAsync<StoreListItem>(
+                      "/api/stores",
+                      cancellationToken);
+
+              private async Task<IReadOnlyCollection<T>> SafeGetAsync<T>(
+                  string path,
+                  CancellationToken cancellationToken)
+              {
+                  try
+                  {
+                      var result = await _httpClient.GetFromJsonAsync<List<T>>(
+                          path,
+                          cancellationToken);
+
+                      return result ?? Array.Empty<T>();
+                  }
+                  catch
+                  {
+                      return Array.Empty<T>();
+                  }
+              }
+          }
+          EOF
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/Outfitters.Web/Program.cs")
+          text = path.read_text()
+
+          registration = """builder.Services.AddHttpClient<IRetailApiClient, RetailApiClient>(client =>
+          {
+              client.BaseAddress = new Uri(apiBaseUrl);
+              client.Timeout = TimeSpan.FromSeconds(30);
+          });
+
+          """
+
+          if "AddHttpClient<IRetailApiClient" not in text:
+              anchor = "var app = builder.Build();"
+              index = text.find(anchor)
+              if index == -1:
+                  raise SystemExit("Program.cs application anchor not found")
+              text = text[:index] + registration + text[index:]
+
+          path.write_text(text)
+          PY
+
+      - name: Write shared table and status components
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Components/Shared/ModuleToolbar.razor <<'EOF'
+          <div class="module-toolbar">
+              <div class="toolbar-search">
+                  <input
+                      value="@SearchText"
+                      @oninput="OnInput"
+                      placeholder="@Placeholder" />
+              </div>
+
+              <div class="toolbar-actions">
+                  @if (!string.IsNullOrWhiteSpace(SecondaryText))
+                  {
+                      <button
+                          type="button"
+                          class="ghost-button"
+                          @onclick="SecondaryAction">
+                          @SecondaryText
+                      </button>
+                  }
+
+                  @if (!string.IsNullOrWhiteSpace(PrimaryText))
+                  {
+                      <button
+                          type="button"
+                          class="primary-button compact"
+                          @onclick="PrimaryAction">
+                          @PrimaryText
+                      </button>
+                  }
+              </div>
+          </div>
+
+          @code {
+              [Parameter] public string SearchText { get; set; } = string.Empty;
+              [Parameter] public EventCallback<string> SearchTextChanged { get; set; }
+              [Parameter] public string Placeholder { get; set; } = "Search...";
+              [Parameter] public string? PrimaryText { get; set; }
+              [Parameter] public EventCallback PrimaryAction { get; set; }
+              [Parameter] public string? SecondaryText { get; set; }
+              [Parameter] public EventCallback SecondaryAction { get; set; }
+
+              private async Task OnInput(ChangeEventArgs args)
+              {
+                  SearchText = args.Value?.ToString() ?? string.Empty;
+                  await SearchTextChanged.InvokeAsync(SearchText);
+              }
+          }
+          EOF
+
+          cat > src/Outfitters.Web/Components/Shared/StatusBadge.razor <<'EOF'
+          <span class="status-badge @CssClass">@Text</span>
+
+          @code {
+              [Parameter] public string Text { get; set; } = string.Empty;
+              [Parameter] public bool Positive { get; set; }
+
+              private string CssClass => Positive
+                  ? "status-positive"
+                  : "status-warning";
+          }
+          EOF
+
+      - name: Write complete POS page
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Components/Pages/Pos.razor <<'EOF'
+          @page "/pos"
+          @inject IRetailApiClient RetailApi
+          @inject IJSRuntime JavaScript
+
+          <PageTitle>Point of Sale - OUTFITTERS</PageTitle>
+
+          <div class="pos-layout">
+              <section class="pos-catalog">
+                  <div class="page-heading pos-heading">
+                      <div>
+                          <span class="eyebrow">Cashier</span>
+                          <h1>Point of Sale</h1>
+                          <p>Scan a barcode or search for a product.</p>
+                      </div>
+                      <button class="ghost-button" @onclick="ClearCart">
+                          New transaction
+                      </button>
+                  </div>
+
+                  <div class="pos-search">
+                      <input
+                          @bind="_search"
+                          @bind:event="oninput"
+                          @onkeydown="SearchOnEnter"
+                          placeholder="Scan barcode or enter product name..." />
+                      <button class="primary-button compact" @onclick="SearchAsync">
+                          Search
+                      </button>
+                  </div>
+
+                  <div class="product-results">
+                      @if (_searching)
+                      {
+                          <div class="empty-state">Searching products...</div>
+                      }
+                      else if (_results.Count == 0)
+                      {
+                          <div class="empty-state">
+                              Product results will appear here.
+                          </div>
+                      }
+                      else
+                      {
+                          @foreach (var product in _results)
+                          {
+                              <button
+                                  type="button"
+                                  class="product-tile"
+                                  @onclick="() => AddToCart(product)">
+                                  <span class="product-title">@product.ProductName</span>
+                                  <span class="product-variant">@product.VariantName</span>
+                                  <span class="product-stock">
+                                      Stock: @product.AvailableQuantity.ToString("0.##")
+                                  </span>
+                                  <strong>@product.UnitPrice.ToString("C")</strong>
+                              </button>
+                          }
+                      }
+                  </div>
+              </section>
+
+              <aside class="cart-panel">
+                  <div class="cart-header">
+                      <div>
+                          <span class="eyebrow">Current sale</span>
+                          <h2>Cart</h2>
+                      </div>
+                      <span>@_cart.Count item(s)</span>
+                  </div>
+
+                  <div class="cart-items">
+                      @if (_cart.Count == 0)
+                      {
+                          <div class="empty-state">
+                              Scan or select a product to begin.
+                          </div>
+                      }
+                      else
+                      {
+                          @foreach (var item in _cart)
+                          {
+                              <article class="cart-item">
+                                  <div>
+                                      <strong>@item.ProductName</strong>
+                                      <span>@item.VariantName</span>
+                                  </div>
+
+                                  <div class="quantity-controls">
+                                      <button @onclick="() => Decrease(item)">−</button>
+                                      <span>@item.Quantity.ToString("0.##")</span>
+                                      <button @onclick="() => Increase(item)">+</button>
+                                  </div>
+
+                                  <div class="cart-line-total">
+                                      <strong>@item.LineTotal.ToString("C")</strong>
+                                      <button
+                                          class="link-button danger"
+                                          @onclick="() => Remove(item)">
+                                          Remove
+                                      </button>
+                                  </div>
+                              </article>
+                          }
+                      }
+                  </div>
+
+                  <div class="cart-summary">
+                      <div>
+                          <span>Subtotal</span>
+                          <strong>@Subtotal.ToString("C")</strong>
+                      </div>
+                      <div>
+                          <span>Discounts</span>
+                          <strong>@DiscountTotal.ToString("C")</strong>
+                      </div>
+                      <div class="grand-total">
+                          <span>Total</span>
+                          <strong>@GrandTotal.ToString("C")</strong>
+                      </div>
+                  </div>
+
+                  <div class="payment-section">
+                      <label>
+                          Payment method
+                          <select @bind="_paymentMethod">
+                              <option>Cash</option>
+                              <option>Card</option>
+                              <option>GCash</option>
+                              <option>Bank Transfer</option>
+                          </select>
+                      </label>
+
+                      <label>
+                          Amount received
+                          <input type="number" step="0.01" @bind="_amountReceived" />
+                      </label>
+
+                      <div class="change-row">
+                          <span>Change</span>
+                          <strong>@ChangeAmount.ToString("C")</strong>
+                      </div>
+
+                      @if (!string.IsNullOrWhiteSpace(_message))
+                      {
+                          <div class="@(_checkoutSucceeded ? "success-message" : "error-message")">
+                              @_message
+                          </div>
+                      }
+
+                      <button
+                          class="primary-button checkout-button"
+                          disabled="@(!_cart.Any() || _processing)"
+                          @onclick="CheckoutAsync">
+                          @(_processing ? "Processing..." : "Complete Sale")
+                      </button>
+                  </div>
+              </aside>
+          </div>
+
+          @code {
+              private readonly List<PosCartItem> _cart = new();
+              private IReadOnlyCollection<PosProduct> _results =
+                  Array.Empty<PosProduct>();
+              private string _search = string.Empty;
+              private string _paymentMethod = "Cash";
+              private decimal _amountReceived;
+              private bool _searching;
+              private bool _processing;
+              private bool _checkoutSucceeded;
+              private string? _message;
+
+              private decimal Subtotal =>
+                  _cart.Sum(x => x.UnitPrice * x.Quantity);
+
+              private decimal DiscountTotal =>
+                  _cart.Sum(x => x.DiscountAmount);
+
+              private decimal GrandTotal =>
+                  Math.Max(0m, Subtotal - DiscountTotal);
+
+              private decimal ChangeAmount =>
+                  Math.Max(0m, _amountReceived - GrandTotal);
+
+              private async Task SearchOnEnter(KeyboardEventArgs args)
+              {
+                  if (args.Key == "Enter")
+                  {
+                      await SearchAsync();
+                  }
+              }
+
+              private async Task SearchAsync()
+              {
+                  if (string.IsNullOrWhiteSpace(_search))
+                  {
+                      return;
+                  }
+
+                  _searching = true;
+                  _results = await RetailApi.SearchProductsAsync(_search, null);
+                  _searching = false;
+
+                  if (_results.Count == 1)
+                  {
+                      AddToCart(_results.First());
+                      _search = string.Empty;
+                  }
+              }
+
+              private void AddToCart(PosProduct product)
+              {
+                  var existing = _cart.FirstOrDefault(x =>
+                      x.ProductVariantId == product.ProductVariantId);
+
+                  if (existing is not null)
+                  {
+                      existing.Quantity += 1m;
+                  }
+                  else
+                  {
+                      _cart.Add(new PosCartItem
+                      {
+                          ProductVariantId = product.ProductVariantId,
+                          ProductName = product.ProductName,
+                          VariantName = product.VariantName,
+                          UnitPrice = product.UnitPrice,
+                          Quantity = 1m
+                      });
+                  }
+
+                  _amountReceived = GrandTotal;
+              }
+
+              private void Increase(PosCartItem item)
+              {
+                  item.Quantity += 1m;
+                  _amountReceived = GrandTotal;
+              }
+
+              private void Decrease(PosCartItem item)
+              {
+                  item.Quantity -= 1m;
+
+                  if (item.Quantity <= 0)
+                  {
+                      _cart.Remove(item);
+                  }
+
+                  _amountReceived = GrandTotal;
+              }
+
+              private void Remove(PosCartItem item)
+              {
+                  _cart.Remove(item);
+                  _amountReceived = GrandTotal;
+              }
+
+              private void ClearCart()
+              {
+                  _cart.Clear();
+                  _results = Array.Empty<PosProduct>();
+                  _search = string.Empty;
+                  _amountReceived = 0m;
+                  _message = null;
+              }
+
+              private async Task CheckoutAsync()
+              {
+                  _processing = true;
+                  _message = null;
+                  _checkoutSucceeded = false;
+
+                  if (_amountReceived < GrandTotal)
+                  {
+                      _message = "The received amount is less than the total.";
+                      _processing = false;
+                      return;
+                  }
+
+                  var request = new CreateSaleRequest
+                  {
+                      StoreId = Guid.Empty,
+                      Items = _cart.Select(x => new CreateSaleLineRequest
+                      {
+                          ProductVariantId = x.ProductVariantId,
+                          Quantity = x.Quantity,
+                          UnitPrice = x.UnitPrice,
+                          DiscountAmount = x.DiscountAmount
+                      }).ToArray(),
+                      Payments = new[]
+                      {
+                          new CheckoutPayment
+                          {
+                              Method = _paymentMethod,
+                              Amount = GrandTotal
+                          }
+                      }
+                  };
+
+                  var result = await RetailApi.CreateSaleAsync(request);
+
+                  if (result is null)
+                  {
+                      _message = "The sale could not be completed.";
+                      _processing = false;
+                      return;
+                  }
+
+                  _checkoutSucceeded = true;
+                  _message = $"Sale completed. Receipt: {result.ReceiptNumber}";
+                  _cart.Clear();
+                  _amountReceived = 0m;
+                  _processing = false;
+
+                  await JavaScript.InvokeVoidAsync(
+                      "console.log",
+                      $"Completed sale {result.Id}");
+              }
+          }
+          EOF
+
+      - name: Write inventory and product administration pages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Components/Pages/Inventory.razor <<'EOF'
+          @page "/inventory"
+          @inject IRetailApiClient RetailApi
+
+          <PageTitle>Inventory - OUTFITTERS</PageTitle>
+
+          <div class="page-heading">
+              <div>
+                  <span class="eyebrow">Stock control</span>
+                  <h1>Inventory</h1>
+                  <p>Review stock levels across all stores.</p>
+              </div>
+          </div>
+
+          <ModuleToolbar
+              @bind-SearchText="_search"
+              Placeholder="Search inventory..."
+              PrimaryText="Stock Adjustment"
+              SecondaryText="Transfer Stock" />
+
+          <section class="page-card table-card">
+              <div class="data-table">
+                  <div class="table-row table-header">
+                      <span>Product</span>
+                      <span>Variant</span>
+                      <span>Store</span>
+                      <span>On Hand</span>
+                      <span>Status</span>
+                  </div>
+
+                  @foreach (var item in FilteredItems)
+                  {
+                      <div class="table-row">
+                          <span>@item.ProductName</span>
+                          <span>@item.VariantName</span>
+                          <span>@item.StoreName</span>
+                          <strong>@item.QuantityOnHand.ToString("0.##")</strong>
+                          <StatusBadge
+                              Text="@(item.IsLowStock ? "Low stock" : "Available")"
+                              Positive="@(!item.IsLowStock)" />
+                      </div>
+                  }
+
+                  @if (!FilteredItems.Any())
+                  {
+                      <div class="empty-state">No inventory records found.</div>
+                  }
+              </div>
+          </section>
+
+          @code {
+              private IReadOnlyCollection<InventoryListItem> _items =
+                  Array.Empty<InventoryListItem>();
+              private string _search = string.Empty;
+
+              private IEnumerable<InventoryListItem> FilteredItems =>
+                  _items.Where(x =>
+                      string.IsNullOrWhiteSpace(_search) ||
+                      x.ProductName.Contains(
+                          _search,
+                          StringComparison.OrdinalIgnoreCase) ||
+                      x.VariantName.Contains(
+                          _search,
+                          StringComparison.OrdinalIgnoreCase) ||
+                      x.StoreName.Contains(
+                          _search,
+                          StringComparison.OrdinalIgnoreCase));
+
+              protected override async Task OnInitializedAsync()
+              {
+                  _items = await RetailApi.GetInventoryAsync(null);
+              }
+          }
+          EOF
+
+          cat > src/Outfitters.Web/Components/Pages/Products.razor <<'EOF'
+          @page "/products"
+          @inject IRetailApiClient RetailApi
+
+          <PageTitle>Products - OUTFITTERS</PageTitle>
+
+          <div class="page-heading">
+              <div>
+                  <span class="eyebrow">Catalog</span>
+                  <h1>Products</h1>
+                  <p>Manage apparel products, categories, and variants.</p>
+              </div>
+          </div>
+
+          <ModuleToolbar
+              @bind-SearchText="_search"
+              Placeholder="Search products..."
+              PrimaryText="Add Product"
+              SecondaryText="Import" />
+
+          <section class="page-card table-card">
+              <div class="data-table">
+                  <div class="table-row table-header product-table">
+                      <span>Product</span>
+                      <span>Category</span>
+                      <span>Status</span>
+                  </div>
+
+                  @foreach (var item in FilteredItems)
+                  {
+                      <div class="table-row product-table">
+                          <strong>@item.Name</strong>
+                          <span>@item.CategoryName</span>
+                          <StatusBadge
+                              Text="@(item.IsActive ? "Active" : "Inactive")"
+                              Positive="@item.IsActive" />
+                      </div>
+                  }
+
+                  @if (!FilteredItems.Any())
+                  {
+                      <div class="empty-state">No products found.</div>
+                  }
+              </div>
+          </section>
+
+          @code {
+              private IReadOnlyCollection<ProductListItem> _items =
+                  Array.Empty<ProductListItem>();
+              private string _search = string.Empty;
+
+              private IEnumerable<ProductListItem> FilteredItems =>
+                  _items.Where(x =>
+                      string.IsNullOrWhiteSpace(_search) ||
+                      x.Name.Contains(
+                          _search,
+                          StringComparison.OrdinalIgnoreCase) ||
+                      x.CategoryName.Contains(
+                          _search,
+                          StringComparison.OrdinalIgnoreCase));
+
+              protected override async Task OnInitializedAsync()
+              {
+                  _items = await RetailApi.GetProductsAsync();
+              }
+          }
+          EOF
+
+      - name: Write customer and employee administration pages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Components/Pages/Customers.razor <<'EOF'
+          @page "/customers"
+          @inject IRetailApiClient RetailApi
+
+          <PageTitle>Customers - OUTFITTERS</PageTitle>
+
+          <div class="page-heading">
+              <div>
+                  <span class="eyebrow">CRM</span>
+                  <h1>Customers</h1>
+                  <p>Manage profiles, loyalty points, and membership tiers.</p>
+              </div>
+          </div>
+
+          <ModuleToolbar
+              @bind-SearchText="_search"
+              Placeholder="Search customer name, email, or phone..."
+              PrimaryText="Add Customer" />
+
+          <section class="page-card table-card">
+              <div class="data-table">
+                  <div class="table-row table-header customer-table">
+                      <span>Customer</span>
+                      <span>Contact</span>
+                      <span>Tier</span>
+                      <span>Points</span>
+                  </div>
+
+                  @foreach (var item in FilteredItems)
+                  {
+                      <div class="table-row customer-table">
+                          <strong>@item.FullName</strong>
+                          <span>
+                              @item.Email
+                              @if (!string.IsNullOrWhiteSpace(item.PhoneNumber))
+                              {
+                                  <small>@item.PhoneNumber</small>
+                              }
+                          </span>
+                          <span>@item.TierName</span>
+                          <strong>@item.LoyaltyPoints.ToString("0.##")</strong>
+                      </div>
+                  }
+
+                  @if (!FilteredItems.Any())
+                  {
+                      <div class="empty-state">No customers found.</div>
+                  }
+              </div>
+          </section>
+
+          @code {
+              private IReadOnlyCollection<CustomerListItem> _items =
+                  Array.Empty<CustomerListItem>();
+              private string _search = string.Empty;
+
+              private IEnumerable<CustomerListItem> FilteredItems =>
+                  _items.Where(x =>
+                      string.IsNullOrWhiteSpace(_search) ||
+                      x.FullName.Contains(
+                          _search,
+                          StringComparison.OrdinalIgnoreCase) ||
+                      (x.Email?.Contains(
+                          _search,
+                          StringComparison.OrdinalIgnoreCase) ?? false) ||
+                      (x.PhoneNumber?.Contains(
+                          _search,
+                          StringComparison.OrdinalIgnoreCase) ?? false));
+
+              protected override async Task OnInitializedAsync()
+              {
+                  _items = await RetailApi.GetCustomersAsync(null);
+              }
+          }
+          EOF
+
+          cat > src/Outfitters.Web/Components/Pages/Employees.razor <<'EOF'
+          @page "/employees"
+          @inject IRetailApiClient RetailApi
+
+          <PageTitle>Employees - OUTFITTERS</PageTitle>
+
+          <div class="page-heading">
+              <div>
+                  <span class="eyebrow">Workforce</span>
+                  <h1>Employees</h1>
+                  <p>Manage employee accounts, roles, and access status.</p>
+              </div>
+          </div>
+
+          <ModuleToolbar
+              @bind-SearchText="_search"
+              Placeholder="Search employees..."
+              PrimaryText="Add Employee"
+              SecondaryText="Attendance" />
+
+          <section class="page-card table-card">
+              <div class="data-table">
+                  <div class="table-row table-header employee-table">
+                      <span>Employee</span>
+                      <span>Email</span>
+                      <span>Role</span>
+                      <span>Status</span>
+                  </div>
+
+                  @foreach (var item in FilteredItems)
+                  {
+                      <div class="table-row employee-table">
+                          <strong>@item.FullName</strong>
+                          <span>@item.Email</span>
+                          <span>@item.RoleName</span>
+                          <StatusBadge
+                              Text="@(item.IsActive ? "Active" : "Inactive")"
+                              Positive="@item.IsActive" />
+                      </div>
+                  }
+
+                  @if (!FilteredItems.Any())
+                  {
+                      <div class="empty-state">No employees found.</div>
+                  }
+              </div>
+          </section>
+
+          @code {
+              private IReadOnlyCollection<EmployeeListItem> _items =
+                  Array.Empty<EmployeeListItem>();
+              private string _search = string.Empty;
+
+              private IEnumerable<EmployeeListItem> FilteredItems =>
+                  _items.Where(x =>
+                      string.IsNullOrWhiteSpace(_search) ||
+                      x.FullName.Contains(
+                          _search,
+                          StringComparison.OrdinalIgnoreCase) ||
+                      x.Email.Contains(
+                          _search,
+                          StringComparison.OrdinalIgnoreCase) ||
+                      x.RoleName.Contains(
+                          _search,
+                          StringComparison.OrdinalIgnoreCase));
+
+              protected override async Task OnInitializedAsync()
+              {
+                  _items = await RetailApi.GetEmployeesAsync();
+              }
+          }
+          EOF
+
+      - name: Update navigation and industrial styles
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/Outfitters.Web/Components/Layout/MainLayout.razor")
+          text = path.read_text()
+
+          if '<NavLink href="/products">Products</NavLink>' not in text:
+              text = text.replace(
+                  '<NavLink href="/inventory">Inventory</NavLink>',
+                  '<NavLink href="/products">Products</NavLink>\n'
+                  '                      <NavLink href="/inventory">Inventory</NavLink>'
+              )
+
+          path.write_text(text)
+          PY
+
+          cat >> src/Outfitters.Web/wwwroot/css/site.css <<'EOF'
+
+          .pos-layout {
+              min-height: calc(100vh - 138px);
+              display: grid;
+              grid-template-columns: minmax(0, 1fr) 390px;
+              gap: 20px;
+          }
+
+          .pos-catalog {
+              min-width: 0;
+          }
+
+          .pos-heading {
+              margin-bottom: 18px;
+          }
+
+          .pos-search {
+              display: flex;
+              gap: 12px;
+              margin-bottom: 18px;
+          }
+
+          .pos-search input,
+          .module-toolbar input,
+          .payment-section input,
+          .payment-section select {
+              width: 100%;
+              padding: 13px 14px;
+              border: 1px solid #343740;
+              border-radius: 10px;
+              color: #fff;
+              background: #111317;
+              outline: none;
+          }
+
+          .pos-search input:focus,
+          .module-toolbar input:focus,
+          .payment-section input:focus,
+          .payment-section select:focus {
+              border-color: #d79a48;
+          }
+
+          .product-results {
+              display: grid;
+              grid-template-columns: repeat(3, minmax(0, 1fr));
+              gap: 14px;
+          }
+
+          .product-tile {
+              min-height: 150px;
+              padding: 16px;
+              display: flex;
+              flex-direction: column;
+              align-items: flex-start;
+              gap: 7px;
+              border: 1px solid #2d3037;
+              border-radius: 14px;
+              color: #f6f7f8;
+              background: #181a1f;
+              text-align: left;
+              cursor: pointer;
+          }
+
+          .product-tile:hover {
+              border-color: #d79a48;
+              transform: translateY(-1px);
+          }
+
+          .product-title {
+              font-weight: 800;
+          }
+
+          .product-variant,
+          .product-stock {
+              color: #9498a1;
+              font-size: 13px;
+          }
+
+          .product-tile strong {
+              margin-top: auto;
+              color: #d79a48;
+              font-size: 18px;
+          }
+
+          .cart-panel {
+              display: flex;
+              flex-direction: column;
+              border: 1px solid #2d3037;
+              border-radius: 16px;
+              background: #181a1f;
+              overflow: hidden;
+          }
+
+          .cart-header {
+              padding: 20px;
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              border-bottom: 1px solid #2d3037;
+          }
+
+          .cart-header h2 {
+              margin: 4px 0 0;
+          }
+
+          .cart-header > span {
+              color: #989ca5;
+          }
+
+          .cart-items {
+              min-height: 220px;
+              max-height: 420px;
+              padding: 8px 20px;
+              overflow-y: auto;
+          }
+
+          .cart-item {
+              padding: 14px 0;
+              display: grid;
+              grid-template-columns: 1fr auto;
+              gap: 12px;
+              border-bottom: 1px solid #292c32;
+          }
+
+          .cart-item > div:first-child span {
+              display: block;
+              margin-top: 4px;
+              color: #9397a0;
+              font-size: 12px;
+          }
+
+          .quantity-controls {
+              display: flex;
+              align-items: center;
+              gap: 8px;
+          }
+
+          .quantity-controls button {
+              width: 28px;
+              height: 28px;
+              border: 1px solid #373a42;
+              border-radius: 8px;
+              color: #fff;
+              background: #23262c;
+          }
+
+          .cart-line-total {
+              grid-column: 1 / -1;
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+          }
+
+          .link-button {
+              padding: 0;
+              border: 0;
+              color: #d79a48;
+              background: transparent;
+              cursor: pointer;
+          }
+
+          .link-button.danger {
+              color: #ef8a8a;
+          }
+
+          .cart-summary {
+              padding: 16px 20px;
+              display: grid;
+              gap: 10px;
+              border-top: 1px solid #2d3037;
+          }
+
+          .cart-summary div,
+          .change-row {
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+          }
+
+          .grand-total {
+              padding-top: 10px;
+              border-top: 1px solid #343740;
+              font-size: 20px;
+          }
+
+          .grand-total strong {
+              color: #d79a48;
+          }
+
+          .payment-section {
+              margin-top: auto;
+              padding: 18px 20px 20px;
+              display: grid;
+              gap: 14px;
+              border-top: 1px solid #2d3037;
+              background: #14161a;
+          }
+
+          .payment-section label {
+              display: grid;
+              gap: 7px;
+              color: #c4c7ce;
+              font-size: 13px;
+          }
+
+          .checkout-button {
+              margin-top: 4px;
+              padding: 15px 18px;
+          }
+
+          .success-message {
+              padding: 10px 12px;
+              border: 1px solid #2e6c4b;
+              border-radius: 8px;
+              color: #a8efc8;
+              background: #163323;
+          }
+
+          .module-toolbar {
+              margin-bottom: 18px;
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              gap: 16px;
+          }
+
+          .toolbar-search {
+              width: min(100%, 480px);
+          }
+
+          .toolbar-actions {
+              display: flex;
+              gap: 10px;
+          }
+
+          .table-card {
+              padding: 0;
+              overflow: hidden;
+          }
+
+          .data-table {
+              width: 100%;
+          }
+
+          .table-row {
+              min-height: 62px;
+              padding: 14px 18px;
+              display: grid;
+              grid-template-columns: 1.5fr 1fr 1fr 0.7fr 0.8fr;
+              align-items: center;
+              gap: 14px;
+              border-bottom: 1px solid #292c32;
+          }
+
+          .table-header {
+              min-height: 48px;
+              color: #8f939d;
+              background: #14161a;
+              font-size: 12px;
+              font-weight: 800;
+              letter-spacing: 0.06em;
+              text-transform: uppercase;
+          }
+
+          .product-table {
+              grid-template-columns: 1.6fr 1fr 0.7fr;
+          }
+
+          .customer-table {
+              grid-template-columns: 1.3fr 1.4fr 0.8fr 0.6fr;
+          }
+
+          .employee-table {
+              grid-template-columns: 1.2fr 1.4fr 0.8fr 0.7fr;
+          }
+
+          .table-row small {
+              display: block;
+              margin-top: 3px;
+              color: #838791;
+          }
+
+          .status-badge {
+              width: fit-content;
+              padding: 6px 9px;
+              border-radius: 999px;
+              font-size: 12px;
+              font-weight: 800;
+          }
+
+          .status-positive {
+              color: #a8efc8;
+              background: #173625;
+          }
+
+          .status-warning {
+              color: #ffd39a;
+              background: #422d15;
+          }
+
+          @media (max-width: 1180px) {
+              .pos-layout {
+                  grid-template-columns: 1fr;
+              }
+
+              .cart-panel {
+                  min-height: 620px;
+              }
+
+              .product-results {
+                  grid-template-columns: repeat(2, minmax(0, 1fr));
+              }
+          }
+
+          @media (max-width: 760px) {
+              .product-results {
+                  grid-template-columns: 1fr;
+              }
+
+              .module-toolbar {
+                  align-items: stretch;
+                  flex-direction: column;
+              }
+
+              .toolbar-search {
+                  width: 100%;
+              }
+
+              .toolbar-actions {
+                  flex-wrap: wrap;
+              }
+
+              .table-row,
+              .product-table,
+              .customer-table,
+              .employee-table {
+                  grid-template-columns: 1fr;
+              }
+
+              .table-header {
+                  display: none;
+              }
+          }
+          EOF
+
+      - name: Restore build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore OutfittersRetailManagementSystem.sln
+          dotnet build OutfittersRetailManagementSystem.sln \
+            --configuration Release \
+            --no-restore
+          dotnet test OutfittersRetailManagementSystem.sln \
+            --configuration Release \
+            --no-build
+
+      - name: Commit milestone 14
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            src/Outfitters.Web \
+            OutfittersRetailManagementSystem.sln
+
+          if git diff --cached --quiet
+          then
+            echo "Milestone 14 files are already committed; nothing to push."
+            exit 0
+          fi
+
+          git commit -m "Milestone 14 - Add web POS and administration dashboard"
+
+          for attempt in 1 2 3
+          do
+            git fetch origin main
+            git rebase origin/main
+
+            if git push origin HEAD:main
+            then
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]
+            then
+              sleep 5
+            fi
+          done
+
+          echo "Unable to push Milestone 14 after three attempts."
+          exit 1
