@@ -235,7 +235,7 @@ jobs:
           <section class="page-card intelligence-filter">
               <label>
                   Store
-                  <select @bind="_selectedStoreId" @onchange="StoreChanged">
+                  <select @bind="_selectedStoreId" @bind:after="LoadAsync">
                       <option value="">All stores</option>
                       @foreach (var store in _stores)
                       {
@@ -463,11 +463,6 @@ jobs:
               protected override async Task OnInitializedAsync()
               {
                   _stores = await RetailApi.GetStoresAsync();
-                  await LoadAsync();
-              }
-
-              private async Task StoreChanged(ChangeEventArgs _)
-              {
                   await LoadAsync();
               }
 
