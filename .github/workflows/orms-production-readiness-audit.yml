@@ -1,0 +1,189 @@
+name: ORMS Production Readiness Audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Restore solution
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore OutfittersRetailManagementSystem.sln
+
+      - name: Build release configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet build OutfittersRetailManagementSystem.sln \
+            --configuration Release \
+            --no-restore
+
+      - name: Run automated tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet test OutfittersRetailManagementSystem.sln \
+            --configuration Release \
+            --no-build \
+            --logger "trx;LogFileName=orms-tests.trx" \
+            --results-directory audit-results/tests
+
+      - name: Inspect implementation coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p audit-results
+          REPORT="audit-results/production-readiness.md"
+
+          {
+            echo "# ORMS Production Readiness Audit"
+            echo
+            echo "Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo
+            echo "## Repository"
+            echo
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Branch: \`${GITHUB_REF_NAME}\`"
+            echo
+            echo "## Solution projects"
+            echo
+            find . -name '*.csproj' -not -path './.git/*' \
+              | sort \
+              | sed 's#^\./#- `#; s#$#`#'
+            echo
+            echo "## Source statistics"
+            echo
+            echo "- C# files: $(find src -name '*.cs' 2>/dev/null | wc -l)"
+            echo "- Razor files: $(find src -name '*.razor' 2>/dev/null | wc -l)"
+            echo "- Migrations: $(find src -path '*/Migrations/*.cs' 2>/dev/null | wc -l)"
+            echo "- Test files: $(find . -path '*Tests*' -name '*.cs' 2>/dev/null | wc -l)"
+            echo
+            echo "## Feature evidence"
+          } > "$REPORT"
+
+          check_feature () {
+            local title="$1"
+            local pattern="$2"
+            local count
+            count=$(grep -RIl \
+              --include='*.cs' \
+              --include='*.razor' \
+              --include='*.json' \
+              --include='*.csproj' \
+              "$pattern" src 2>/dev/null | wc -l)
+
+            if [ "$count" -gt 0 ]; then
+              echo "- [x] ${title}: evidence found in ${count} file(s)" >> "$REPORT"
+            else
+              echo "- [ ] ${title}: no implementation evidence found" >> "$REPORT"
+            fi
+          }
+
+          check_feature "Point of sale" "Checkout\\|PointOfSale\\|SaleController"
+          check_feature "Inventory management" "Inventory\\|StockMovement"
+          check_feature "PostgreSQL provider" "Npgsql"
+          check_feature "Authentication and authorization" "Authorize\\|Authentication"
+          check_feature "Customer loyalty and CRM" "Loyalty\\|CustomerTier\\|StoreCredit"
+          check_feature "Purchasing and suppliers" "PurchaseOrder\\|Supplier"
+          check_feature "Employee and HR" "Attendance\\|Employee\\|LeaveRequest"
+          check_feature "Multi-store transfers" "StockTransfer\\|StoreId"
+          check_feature "Accounting" "JournalEntry\\|GeneralLedger\\|Accounting"
+          check_feature "Barcode support" "Barcode\\|Sku"
+          check_feature "Receipt printing" "Receipt\\|Printer\\|ESC/POS"
+          check_feature "Backup and restore" "Backup\\|Restore"
+          check_feature "Two-factor authentication" "TwoFactor\\|Authenticator"
+          check_feature "Forecasting or AI implementation" "Forecast\\|MLContext\\|Prediction"
+
+          {
+            echo
+            echo "## Deployment checks"
+          } >> "$REPORT"
+
+          if find . -iname 'docker-compose*.yml' -o -iname 'docker-compose*.yaml' \
+            | grep -q .; then
+            echo "- [x] Docker Compose configuration found" >> "$REPORT"
+          else
+            echo "- [ ] Docker Compose configuration not found" >> "$REPORT"
+          fi
+
+          if find . -iname 'appsettings.Production.json' | grep -q .; then
+            echo "- [x] Production settings file found" >> "$REPORT"
+          else
+            echo "- [ ] Production settings file not found" >> "$REPORT"
+          fi
+
+          if grep -RIl --include='*.csproj' \
+            'RuntimeIdentifier\\|RuntimeIdentifiers' src 2>/dev/null | grep -q .; then
+            echo "- [x] Runtime identifier configuration found" >> "$REPORT"
+          else
+            echo "- [ ] Windows runtime identifier configuration not found" >> "$REPORT"
+          fi
+
+          {
+            echo
+            echo "## Important interpretation"
+            echo
+            echo "A successful build proves only that the checked-in code compiles and tests pass."
+            echo "It does not prove that every planned feature is complete, connected to PostgreSQL,"
+            echo "usable through the UI, compatible with an XPrinter, or ready for a live store."
+          } >> "$REPORT"
+
+          cat "$REPORT"
+
+      - name: Publish API
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          API_PROJECT=$(find src -name 'Outfitters.API.csproj' -print -quit)
+
+          if [ -z "$API_PROJECT" ]; then
+            echo "Outfitters.API.csproj was not found."
+            exit 1
+          fi
+
+          dotnet publish "$API_PROJECT" \
+            --configuration Release \
+            --no-build \
+            --output audit-results/publish/api
+
+      - name: Publish web application
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          WEB_PROJECT=$(find src -name 'Outfitters.Web.csproj' -print -quit)
+
+          if [ -z "$WEB_PROJECT" ]; then
+            echo "Outfitters.Web.csproj was not found."
+            exit 1
+          fi
+
+          dotnet publish "$WEB_PROJECT" \
+            --configuration Release \
+            --no-build \
+            --output audit-results/publish/web
+
+      - name: Upload production audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: orms-production-readiness-audit
+          path: audit-results
+          if-no-files-found: error
+          retention-days: 30
