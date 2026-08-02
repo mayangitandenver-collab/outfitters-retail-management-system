@@ -1,0 +1,325 @@
+@page "/inventory/intelligence"
+@attribute [Authorize(Roles = "Administrator,Manager,InventoryStaff")]
+@inject IRetailApiClient RetailApi
+@inject IInventoryIntelligenceApiClient IntelligenceApi
+
+<PageTitle>Inventory Intelligence - OUTFITTERS</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">Inventory planning</span>
+        <h1>Inventory Intelligence</h1>
+        <p>Forecast demand, identify risk, and create reorder recommendations.</p>
+    </div>
+
+    <button
+        type="button"
+        class="primary-button compact"
+        @onclick="LoadAsync">
+        Refresh
+    </button>
+</div>
+
+<section class="page-card intelligence-filter">
+    <label>
+        Store
+        <select @bind="_selectedStoreId" @bind:after="LoadAsync">
+            <option value="">All stores</option>
+            @foreach (var store in _stores)
+            {
+                <option value="@store.Id">@store.Name</option>
+            }
+        </select>
+    </label>
+</section>
+
+<div class="metric-grid intelligence-metrics">
+    <article class="metric-card">
+        <span>Inventory Value</span>
+        <strong>@_summary.TotalInventoryValue.ToString("C")</strong>
+    </article>
+
+    <article class="metric-card alert-card">
+        <span>Low Stock</span>
+        <strong>@_summary.LowStockItemCount</strong>
+    </article>
+
+    <article class="metric-card alert-card">
+        <span>Out of Stock</span>
+        <strong>@_summary.OutOfStockItemCount</strong>
+    </article>
+
+    <article class="metric-card">
+        <span>Dead Stock</span>
+        <strong>@_summary.DeadStockItemCount</strong>
+    </article>
+
+    <article class="metric-card">
+        <span>Reorder Suggestions</span>
+        <strong>@_summary.ReorderSuggestionCount</strong>
+    </article>
+
+    <article class="metric-card">
+        <span>30-Day Demand</span>
+        <strong>@_summary.EstimatedThirtyDayDemand.ToString("0.##")</strong>
+    </article>
+</div>
+
+<section class="page-card intelligence-section">
+    <div class="section-heading">
+        <div>
+            <span class="eyebrow">Action required</span>
+            <h2>Reorder Suggestions</h2>
+        </div>
+
+        <button
+            type="button"
+            class="primary-button compact"
+            disabled="@(!_selectedRecommendationIds.Any() || _creatingRecommendation)"
+            @onclick="CreateRecommendationAsync">
+            @(_creatingRecommendation
+                ? "Creating..."
+                : "Create Purchase Recommendation")
+        </button>
+    </div>
+
+    <div class="data-table">
+        <div class="table-row table-header reorder-table">
+            <span>Select</span>
+            <span>Product</span>
+            <span>Store</span>
+            <span>Supplier</span>
+            <span>On Hand</span>
+            <span>Suggested</span>
+            <span>Est. Value</span>
+        </div>
+
+        @foreach (var item in _summary.ReorderSuggestions)
+        {
+            <div class="table-row reorder-table">
+                <span>
+                    <input
+                        type="checkbox"
+                        checked="@_selectedRecommendationIds.Contains(item.ProductVariantId)"
+                        @onchange="args => ToggleRecommendation(item.ProductVariantId, args)" />
+                </span>
+                <span>
+                    <strong>@item.ProductName</strong>
+                    <small>@item.VariantName</small>
+                </span>
+                <span>@item.StoreName</span>
+                <span>@item.SupplierName</span>
+                <span>@item.QuantityOnHand.ToString("0.##")</span>
+                <span>@item.SuggestedOrderQuantity.ToString("0.##")</span>
+                <strong>@item.EstimatedOrderValue.ToString("C")</strong>
+            </div>
+        }
+
+        @if (_summary.ReorderSuggestions.Count == 0)
+        {
+            <div class="empty-state">No reorder suggestions are available.</div>
+        }
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="@(_success ? "success-message" : "error-message")">
+            @_message
+        </div>
+    }
+</section>
+
+<section class="page-card intelligence-section">
+    <div class="section-heading">
+        <h2>Fast-Moving Items</h2>
+    </div>
+
+    <div class="data-table">
+        <div class="table-row table-header intelligence-table">
+            <span>Product</span>
+            <span>Store</span>
+            <span>30-Day Sales</span>
+            <span>Days of Cover</span>
+            <span>ABC Class</span>
+        </div>
+
+        @foreach (var item in _summary.FastMovingItems)
+        {
+            <div class="table-row intelligence-table">
+                <span>
+                    <strong>@item.ProductName</strong>
+                    <small>@item.VariantName</small>
+                </span>
+                <span>@item.StoreName</span>
+                <span>@item.UnitsSoldThirtyDays.ToString("0.##")</span>
+                <span>@item.DaysOfCover.ToString("0.##")</span>
+                <span class="classification-badge class-@item.Classification.ToLowerInvariant()">
+                    @item.Classification
+                </span>
+            </div>
+        }
+
+        @if (_summary.FastMovingItems.Count == 0)
+        {
+            <div class="empty-state">No fast-moving item data is available.</div>
+        }
+    </div>
+</section>
+
+<section class="page-card intelligence-section">
+    <div class="section-heading">
+        <h2>Dead Stock</h2>
+    </div>
+
+    <div class="data-table">
+        <div class="table-row table-header intelligence-table">
+            <span>Product</span>
+            <span>Store</span>
+            <span>On Hand</span>
+            <span>30-Day Sales</span>
+            <span>ABC Class</span>
+        </div>
+
+        @foreach (var item in _summary.DeadStockItems)
+        {
+            <div class="table-row intelligence-table">
+                <span>
+                    <strong>@item.ProductName</strong>
+                    <small>@item.VariantName</small>
+                </span>
+                <span>@item.StoreName</span>
+                <span>@item.QuantityOnHand.ToString("0.##")</span>
+                <span>@item.UnitsSoldThirtyDays.ToString("0.##")</span>
+                <span class="classification-badge class-@item.Classification.ToLowerInvariant()">
+                    @item.Classification
+                </span>
+            </div>
+        }
+
+        @if (_summary.DeadStockItems.Count == 0)
+        {
+            <div class="empty-state">No dead-stock items were detected.</div>
+        }
+    </div>
+</section>
+
+<section class="page-card intelligence-section">
+    <div class="section-heading">
+        <h2>Branch Comparison</h2>
+    </div>
+
+    <div class="data-table">
+        <div class="table-row table-header branch-table">
+            <span>Store</span>
+            <span>Inventory Value</span>
+            <span>Active SKUs</span>
+            <span>Low Stock</span>
+            <span>Out of Stock</span>
+            <span>Sell-Through</span>
+        </div>
+
+        @foreach (var item in _summary.BranchComparison)
+        {
+            <div class="table-row branch-table">
+                <strong>@item.StoreName</strong>
+                <span>@item.InventoryValue.ToString("C")</span>
+                <span>@item.ActiveSkuCount</span>
+                <span>@item.LowStockCount</span>
+                <span>@item.OutOfStockCount</span>
+                <span>@item.ThirtyDaySellThroughRate.ToString("0.##")%</span>
+            </div>
+        }
+
+        @if (_summary.BranchComparison.Count == 0)
+        {
+            <div class="empty-state">No branch comparison data is available.</div>
+        }
+    </div>
+</section>
+
+@code {
+    private IReadOnlyCollection<StoreListItem> _stores =
+        Array.Empty<StoreListItem>();
+
+    private InventoryIntelligenceSummary _summary = new();
+    private readonly HashSet<Guid> _selectedRecommendationIds = new();
+    private Guid? _selectedStoreId;
+    private bool _creatingRecommendation;
+    private bool _success;
+    private string? _message;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _stores = await RetailApi.GetStoresAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _message = null;
+        _selectedRecommendationIds.Clear();
+        _summary = await IntelligenceApi.GetSummaryAsync(_selectedStoreId);
+    }
+
+    private void ToggleRecommendation(
+        Guid productVariantId,
+        ChangeEventArgs args)
+    {
+        var selected = args.Value is bool value && value;
+
+        if (selected)
+        {
+            _selectedRecommendationIds.Add(productVariantId);
+        }
+        else
+        {
+            _selectedRecommendationIds.Remove(productVariantId);
+        }
+    }
+
+    private async Task CreateRecommendationAsync()
+    {
+        _message = null;
+        _success = false;
+
+        if (!_selectedStoreId.HasValue)
+        {
+            _message = "Select a specific store first.";
+            return;
+        }
+
+        var selectedLines = _summary.ReorderSuggestions
+            .Where(x => _selectedRecommendationIds.Contains(x.ProductVariantId))
+            .Select(x => new CreatePurchaseRecommendationLine
+            {
+                ProductVariantId = x.ProductVariantId,
+                Quantity = x.SuggestedOrderQuantity
+            })
+            .ToArray();
+
+        if (selectedLines.Length == 0)
+        {
+            _message = "Select at least one recommendation.";
+            return;
+        }
+
+        _creatingRecommendation = true;
+
+        _success = await IntelligenceApi.CreatePurchaseRecommendationAsync(
+            new CreatePurchaseRecommendationRequest
+            {
+                StoreId = _selectedStoreId.Value,
+                Lines = selectedLines
+            });
+
+        _creatingRecommendation = false;
+        _message = _success
+            ? "Purchase recommendation created successfully."
+            : "The purchase recommendation could not be created.";
+
+        if (_success)
+        {
+            _selectedRecommendationIds.Clear();
+        }
+    }
+}
