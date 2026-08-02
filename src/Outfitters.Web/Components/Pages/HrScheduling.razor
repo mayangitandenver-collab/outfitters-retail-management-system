@@ -1,0 +1,187 @@
+@page "/hr/scheduling"
+@attribute [Authorize(Roles = "Administrator,Manager")]
+@inject IHrApiClient HrApi
+
+<PageTitle>HR Scheduling - OUTFITTERS</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">Workforce planning</span>
+        <h1>Shifts and Leave</h1>
+        <p>Create employee shifts and submit leave requests.</p>
+    </div>
+</div>
+
+<div class="hr-tools-grid">
+    <section class="page-card hr-form">
+        <h2>Create Shift</h2>
+
+        <label>
+            Employee ID
+            <input @bind="_shiftEmployeeIdText" />
+        </label>
+
+        <label>
+            Store ID
+            <input @bind="_shiftStoreIdText" />
+        </label>
+
+        <label>
+            Shift Start
+            <input type="datetime-local" @bind="_shiftStartsAt" />
+        </label>
+
+        <label>
+            Shift End
+            <input type="datetime-local" @bind="_shiftEndsAt" />
+        </label>
+
+        <label>
+            Notes
+            <textarea rows="3" @bind="_shiftNotes"></textarea>
+        </label>
+
+        <button
+            type="button"
+            class="primary-button"
+            @onclick="CreateShiftAsync">
+            Create Shift
+        </button>
+    </section>
+
+    <section class="page-card hr-form">
+        <h2>Create Leave Request</h2>
+
+        <label>
+            Employee ID
+            <input @bind="_leaveEmployeeIdText" />
+        </label>
+
+        <label>
+            Leave Type
+            <select @bind="_leaveType">
+                <option>Vacation</option>
+                <option>Sick</option>
+                <option>Emergency</option>
+                <option>Maternity</option>
+                <option>Paternity</option>
+                <option>Unpaid</option>
+            </select>
+        </label>
+
+        <label>
+            Start Date
+            <InputDate @bind-Value="_leaveStartsOn" />
+        </label>
+
+        <label>
+            End Date
+            <InputDate @bind-Value="_leaveEndsOn" />
+        </label>
+
+        <label>
+            Reason
+            <textarea rows="3" @bind="_leaveReason"></textarea>
+        </label>
+
+        <button
+            type="button"
+            class="primary-button"
+            @onclick="CreateLeaveRequestAsync">
+            Submit Leave Request
+        </button>
+    </section>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="@(_success ? "success-message" : "error-message")">
+        @_message
+    </div>
+}
+
+@code {
+    private string _shiftEmployeeIdText = string.Empty;
+    private string _shiftStoreIdText = string.Empty;
+    private DateTime _shiftStartsAt = DateTime.Today.AddHours(9);
+    private DateTime _shiftEndsAt = DateTime.Today.AddHours(18);
+    private string _shiftNotes = string.Empty;
+
+    private string _leaveEmployeeIdText = string.Empty;
+    private string _leaveType = "Vacation";
+    private DateTime _leaveStartsOn = DateTime.Today.AddDays(7);
+    private DateTime _leaveEndsOn = DateTime.Today.AddDays(7);
+    private string _leaveReason = string.Empty;
+
+    private string? _message;
+    private bool _success;
+
+    private async Task CreateShiftAsync()
+    {
+        if (!Guid.TryParse(
+            _shiftEmployeeIdText,
+            out var employeeId) ||
+            !Guid.TryParse(
+                _shiftStoreIdText,
+                out var storeId))
+        {
+            SetMessage(false, "Enter valid employee and store IDs.");
+            return;
+        }
+
+        if (_shiftEndsAt <= _shiftStartsAt)
+        {
+            SetMessage(false, "Shift end must be after shift start.");
+            return;
+        }
+
+        var success = await HrApi.CreateShiftAsync(
+            new ShiftAssignmentRequest
+            {
+                EmployeeId = employeeId,
+                StoreId = storeId,
+                StartsAtUtc = _shiftStartsAt.ToUniversalTime(),
+                EndsAtUtc = _shiftEndsAt.ToUniversalTime(),
+                Notes = _shiftNotes
+            });
+
+        SetMessage(
+            success,
+            success
+                ? "Shift created successfully."
+                : "The shift could not be created.");
+    }
+
+    private async Task CreateLeaveRequestAsync()
+    {
+        if (!Guid.TryParse(
+            _leaveEmployeeIdText,
+            out var employeeId))
+        {
+            SetMessage(false, "Enter a valid employee ID.");
+            return;
+        }
+
+        var success = await HrApi.CreateLeaveRequestAsync(
+            new LeaveRequestModel
+            {
+                EmployeeId = employeeId,
+                LeaveType = _leaveType,
+                StartsOnUtc = _leaveStartsOn.ToUniversalTime(),
+                EndsOnUtc = _leaveEndsOn.ToUniversalTime(),
+                Reason = _leaveReason
+            });
+
+        SetMessage(
+            success,
+            success
+                ? "Leave request submitted."
+                : "The leave request could not be submitted.");
+    }
+
+    private void SetMessage(bool success, string message)
+    {
+        _success = success;
+        _message = message;
+    }
+}

@@ -1,0 +1,139 @@
+@page "/hr"
+@attribute [Authorize(Roles = "Administrator,Manager")]
+@inject IHrApiClient HrApi
+
+<PageTitle>Employee and HR Management - OUTFITTERS</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">People operations</span>
+        <h1>Employee and HR Management</h1>
+        <p>Monitor attendance, employee performance, commissions, and staffing alerts.</p>
+    </div>
+
+    <button
+        type="button"
+        class="primary-button compact"
+        @onclick="LoadAsync">
+        Refresh
+    </button>
+</div>
+
+<div class="metric-grid">
+    <article class="metric-card">
+        <span>Active Employees</span>
+        <strong>@_summary.ActiveEmployeeCount</strong>
+    </article>
+
+    <article class="metric-card">
+        <span>Present Today</span>
+        <strong>@_summary.PresentTodayCount</strong>
+    </article>
+
+    <article class="metric-card alert-card">
+        <span>Absent Today</span>
+        <strong>@_summary.AbsentTodayCount</strong>
+    </article>
+
+    <article class="metric-card">
+        <span>On Leave</span>
+        <strong>@_summary.OnLeaveTodayCount</strong>
+    </article>
+
+    <article class="metric-card alert-card">
+        <span>Late Today</span>
+        <strong>@_summary.LateTodayCount</strong>
+    </article>
+
+    <article class="metric-card">
+        <span>Monthly Commission</span>
+        <strong>@_summary.CurrentMonthCommission.ToString("C")</strong>
+    </article>
+</div>
+
+<section class="page-card hr-section">
+    <div class="section-heading">
+        <h2>Top Employee Performance</h2>
+    </div>
+
+    <div class="data-table">
+        <div class="table-row table-header employee-performance-table">
+            <span>Employee</span>
+            <span>Store</span>
+            <span>Position</span>
+            <span>Sales</span>
+            <span>Transactions</span>
+            <span>Average Sale</span>
+            <span>Commission</span>
+        </div>
+
+        @foreach (var item in _summary.TopEmployees)
+        {
+            <div class="table-row employee-performance-table">
+                <span>
+                    <strong>@item.EmployeeName</strong>
+                    <small>@item.EmployeeNumber</small>
+                </span>
+                <span>@item.StoreName</span>
+                <span>@item.Position</span>
+                <span>@item.SalesAmount.ToString("C")</span>
+                <span>@item.TransactionCount</span>
+                <span>@item.AverageTransactionValue.ToString("C")</span>
+                <span>@item.CommissionAmount.ToString("C")</span>
+            </div>
+        }
+
+        @if (_summary.TopEmployees.Count == 0)
+        {
+            <div class="empty-state">No employee performance data is available.</div>
+        }
+    </div>
+</section>
+
+<section class="page-card hr-section">
+    <div class="section-heading">
+        <h2>Attendance Alerts</h2>
+    </div>
+
+    <div class="data-table">
+        <div class="table-row table-header attendance-alert-table">
+            <span>Employee</span>
+            <span>Store</span>
+            <span>Alert</span>
+            <span>Time</span>
+            <span>Notes</span>
+        </div>
+
+        @foreach (var item in _summary.AttendanceAlerts)
+        {
+            <div class="table-row attendance-alert-table">
+                <strong>@item.EmployeeName</strong>
+                <span>@item.StoreName</span>
+                <StatusBadge
+                    Text="@item.AlertType"
+                    Positive="@(item.AlertType == "Resolved")" />
+                <span>@item.OccurredAtUtc.ToLocalTime().ToString("MMM d, HH:mm")</span>
+                <span>@item.Notes</span>
+            </div>
+        }
+
+        @if (_summary.AttendanceAlerts.Count == 0)
+        {
+            <div class="empty-state">No attendance alerts are available.</div>
+        }
+    </div>
+</section>
+
+@code {
+    private HrDashboardSummary _summary = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _summary = await HrApi.GetDashboardAsync();
+    }
+}
