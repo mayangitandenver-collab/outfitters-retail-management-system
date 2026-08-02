@@ -1,0 +1,409 @@
+name: ORMS Milestone 15.1 - Clean Web Authentication Rebuild
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  milestone151:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Remove broken template pages
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f src/Outfitters.Web/Components/Pages/Weather.razor
+          rm -f src/Outfitters.Web/Components/Pages/Counter.razor
+          rm -f src/Outfitters.Web/Components/Pages/Home.razor
+          rm -f src/Outfitters.Web/Components/Pages/Error.razor
+
+      - name: Add authentication dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet add src/Outfitters.Web/Outfitters.Web.csproj package System.IdentityModel.Tokens.Jwt --version 8.14.0
+
+      - name: Rebuild authentication services
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src/Outfitters.Web/Authentication
+          mkdir -p src/Outfitters.Web/Components/Shared
+          mkdir -p src/Outfitters.Web/Components/Pages
+
+          cat > src/Outfitters.Web/Authentication/AuthSession.cs <<'CS'
+          using System.IdentityModel.Tokens.Jwt;
+          using System.Security.Claims;
+          using Microsoft.AspNetCore.Components.Authorization;
+
+          namespace Outfitters.Web.Authentication;
+
+          public sealed class AuthSession
+          {
+              public string? AccessToken { get; private set; }
+              public ClaimsPrincipal Principal { get; private set; } = new(new ClaimsIdentity());
+
+              public void SignIn(string token)
+              {
+                  AccessToken = token;
+                  Principal = CreatePrincipal(token);
+              }
+
+              public void SignOut()
+              {
+                  AccessToken = null;
+                  Principal = new ClaimsPrincipal(new ClaimsIdentity());
+              }
+
+              private static ClaimsPrincipal CreatePrincipal(string token)
+              {
+                  try
+                  {
+                      var jwt = new JwtSecurityTokenHandler().ReadJwtToken(token);
+                      var claims = jwt.Claims.ToList();
+
+                      var name = claims.FirstOrDefault(x => x.Type is ClaimTypes.Name or "name" or "unique_name");
+                      if (name is not null && claims.All(x => x.Type != ClaimTypes.Name))
+                      {
+                          claims.Add(new Claim(ClaimTypes.Name, name.Value));
+                      }
+
+                      foreach (var role in claims.Where(x => x.Type is "role" or "roles").Select(x => x.Value).Distinct(StringComparer.OrdinalIgnoreCase))
+                      {
+                          if (claims.All(x => x.Type != ClaimTypes.Role || !string.Equals(x.Value, role, StringComparison.OrdinalIgnoreCase)))
+                          {
+                              claims.Add(new Claim(ClaimTypes.Role, role));
+                          }
+                      }
+
+                      return new ClaimsPrincipal(new ClaimsIdentity(claims, "Bearer", ClaimTypes.Name, ClaimTypes.Role));
+                  }
+                  catch
+                  {
+                      return new ClaimsPrincipal(new ClaimsIdentity());
+                  }
+              }
+          }
+
+          public sealed class OrmsAuthenticationStateProvider : AuthenticationStateProvider
+          {
+              private readonly AuthSession _session;
+
+              public OrmsAuthenticationStateProvider(AuthSession session) => _session = session;
+
+              public override Task<AuthenticationState> GetAuthenticationStateAsync() =>
+                  Task.FromResult(new AuthenticationState(_session.Principal));
+
+              public void SignIn(string token)
+              {
+                  _session.SignIn(token);
+                  NotifyAuthenticationStateChanged(GetAuthenticationStateAsync());
+              }
+
+              public void SignOut()
+              {
+                  _session.SignOut();
+                  NotifyAuthenticationStateChanged(GetAuthenticationStateAsync());
+              }
+          }
+          CS
+
+          cat > src/Outfitters.Web/Authentication/BearerTokenHandler.cs <<'CS'
+          using System.Net.Http.Headers;
+
+          namespace Outfitters.Web.Authentication;
+
+          public sealed class BearerTokenHandler : DelegatingHandler
+          {
+              private readonly AuthSession _session;
+
+              public BearerTokenHandler(AuthSession session) => _session = session;
+
+              protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+              {
+                  if (!string.IsNullOrWhiteSpace(_session.AccessToken))
+                  {
+                      request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _session.AccessToken);
+                  }
+
+                  return base.SendAsync(request, cancellationToken);
+              }
+          }
+          CS
+
+      - name: Rebuild web startup and routing
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Program.cs <<'CS'
+          using Microsoft.AspNetCore.Components.Authorization;
+          using Outfitters.Web.Authentication;
+          using Outfitters.Web.Components;
+          using Outfitters.Web.Services;
+
+          var builder = WebApplication.CreateBuilder(args);
+
+          builder.Services.AddRazorComponents().AddInteractiveServerComponents();
+          builder.Services.AddAuthorizationCore();
+          builder.Services.AddScoped<AuthSession>();
+          builder.Services.AddScoped<BearerTokenHandler>();
+          builder.Services.AddScoped<AuthenticationStateProvider, OrmsAuthenticationStateProvider>();
+
+          var apiBaseUrl = builder.Configuration["Api:BaseUrl"] ?? "http://localhost:8080";
+
+          builder.Services.AddHttpClient<IApiClient, ApiClient>(client =>
+          {
+              client.BaseAddress = new Uri(apiBaseUrl);
+              client.Timeout = TimeSpan.FromSeconds(30);
+          }).AddHttpMessageHandler<BearerTokenHandler>();
+
+          builder.Services.AddHttpClient<IRetailApiClient, RetailApiClient>(client =>
+          {
+              client.BaseAddress = new Uri(apiBaseUrl);
+              client.Timeout = TimeSpan.FromSeconds(30);
+          }).AddHttpMessageHandler<BearerTokenHandler>();
+
+          var app = builder.Build();
+
+          if (!app.Environment.IsDevelopment())
+          {
+              app.UseExceptionHandler("/error", createScopeForErrors: true);
+              app.UseHsts();
+          }
+
+          app.UseStaticFiles();
+          app.UseAntiforgery();
+          app.MapGet("/health", () => Results.Ok(new { Status = "Healthy", Service = "Outfitters.Web", UtcTime = DateTime.UtcNow }));
+          app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
+          app.Run();
+          CS
+
+          cat > src/Outfitters.Web/Components/_Imports.razor <<'RAZOR'
+          @using System.Net.Http.Json
+          @using Microsoft.AspNetCore.Authorization
+          @using Microsoft.AspNetCore.Components.Authorization
+          @using Microsoft.AspNetCore.Components.Forms
+          @using Microsoft.AspNetCore.Components.Routing
+          @using Microsoft.AspNetCore.Components.Web
+          @using Microsoft.JSInterop
+          @using Outfitters.Web
+          @using Outfitters.Web.Authentication
+          @using Outfitters.Web.Components
+          @using Outfitters.Web.Components.Shared
+          @using Outfitters.Web.Models
+          @using Outfitters.Web.Services
+          RAZOR
+
+          cat > src/Outfitters.Web/Components/Routes.razor <<'RAZOR'
+          <CascadingAuthenticationState>
+              <Router AppAssembly="typeof(Program).Assembly">
+                  <Found Context="routeData">
+                      <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
+                          <NotAuthorized>
+                              <RedirectToLogin />
+                          </NotAuthorized>
+                      </AuthorizeRouteView>
+                      <FocusOnNavigate RouteData="routeData" Selector="h1" />
+                  </Found>
+                  <NotFound>
+                      <LayoutView Layout="typeof(Layout.MainLayout)">
+                          <section class="page-card"><h1>Page not found</h1></section>
+                      </LayoutView>
+                  </NotFound>
+              </Router>
+          </CascadingAuthenticationState>
+          RAZOR
+
+          cat > src/Outfitters.Web/Components/Shared/RedirectToLogin.razor <<'RAZOR'
+          @namespace Outfitters.Web.Components.Shared
+          @inject NavigationManager Navigation
+
+          <p>Redirecting to sign in...</p>
+
+          @code {
+              protected override void OnAfterRender(bool firstRender)
+              {
+                  if (firstRender)
+                  {
+                      Navigation.NavigateTo("/login", replace: true);
+                  }
+              }
+          }
+          RAZOR
+
+      - name: Rebuild clean login dashboard and error pages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Components/Pages/Login.razor <<'RAZOR'
+          @page "/login"
+          @attribute [AllowAnonymous]
+          @inject IApiClient ApiClient
+          @inject OrmsAuthenticationStateProvider AuthState
+          @inject NavigationManager Navigation
+
+          <PageTitle>Login - OUTFITTERS</PageTitle>
+
+          <div class="login-page">
+              <section class="login-panel">
+                  <div class="brand login-brand">
+                      <div class="brand-mark">O</div>
+                      <div><strong>OUTFITTERS</strong><span>Retail Management System</span></div>
+                  </div>
+                  <h1>Sign in</h1>
+                  <p>Enter your employee account to continue.</p>
+                  <EditForm Model="_request" OnValidSubmit="SubmitAsync">
+                      <DataAnnotationsValidator />
+                      <label>Email address<InputText @bind-Value="_request.Email" /></label>
+                      <label>Password<InputText @bind-Value="_request.Password" type="password" /></label>
+                      <label class="checkbox-row"><InputCheckbox @bind-Value="_request.RememberMe" />Remember me</label>
+                      @if (!string.IsNullOrWhiteSpace(_error))
+                      {
+                          <div class="error-message">@_error</div>
+                      }
+                      <button class="primary-button" disabled="@_busy">@(_busy ? "Signing in..." : "Sign in")</button>
+                  </EditForm>
+              </section>
+          </div>
+
+          @code {
+              private readonly LoginRequest _request = new();
+              private bool _busy;
+              private string? _error;
+
+              private async Task SubmitAsync()
+              {
+                  _busy = true;
+                  _error = null;
+                  var result = await ApiClient.LoginAsync(_request);
+                  if (result is null || string.IsNullOrWhiteSpace(result.AccessToken))
+                  {
+                      _error = "The email or password is incorrect.";
+                      _busy = false;
+                      return;
+                  }
+                  AuthState.SignIn(result.AccessToken);
+                  Navigation.NavigateTo("/");
+              }
+          }
+          RAZOR
+
+          cat > src/Outfitters.Web/Components/Pages/Dashboard.razor <<'RAZOR'
+          @page "/"
+          @attribute [Authorize]
+          @inject IApiClient ApiClient
+          @inject NavigationManager Navigation
+
+          <PageTitle>Dashboard - OUTFITTERS</PageTitle>
+
+          <div class="page-heading">
+              <div><span class="eyebrow">Overview</span><h1>Store Dashboard</h1><p>Live retail performance and operational alerts.</p></div>
+              <button type="button" class="primary-button compact" @onclick="() => Navigation.NavigateTo(&quot;/pos&quot;)">New Sale</button>
+          </div>
+
+          @if (_loading)
+          {
+              <section class="page-card">Loading dashboard...</section>
+          }
+          else
+          {
+              <div class="metric-grid">
+                  <article class="metric-card"><span>Today's Sales</span><strong>@_summary.TodaySales.ToString("C")</strong></article>
+                  <article class="metric-card"><span>Monthly Sales</span><strong>@_summary.MonthSales.ToString("C")</strong></article>
+                  <article class="metric-card"><span>Inventory Value</span><strong>@_summary.InventoryValue.ToString("C")</strong></article>
+                  <article class="metric-card alert-card"><span>Low Stock Items</span><strong>@_summary.LowStockCount</strong></article>
+                  <article class="metric-card"><span>Active Customers</span><strong>@_summary.ActiveCustomers</strong></article>
+                  <article class="metric-card"><span>Transactions Today</span><strong>@_summary.TransactionsToday</strong></article>
+              </div>
+          }
+
+          @code {
+              private DashboardSummary _summary = new();
+              private bool _loading = true;
+              protected override async Task OnInitializedAsync()
+              {
+                  _summary = await ApiClient.GetDashboardAsync();
+                  _loading = false;
+              }
+          }
+          RAZOR
+
+          cat > src/Outfitters.Web/Components/Pages/Error.razor <<'RAZOR'
+          @page "/error"
+          @attribute [AllowAnonymous]
+          <PageTitle>Error - OUTFITTERS</PageTitle>
+          <section class="page-card"><h1>Something went wrong</h1><p>Please return to the dashboard and try again.</p></section>
+          RAZOR
+
+      - name: Protect and normalize all business pages
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          pages = Path("src/Outfitters.Web/Components/Pages")
+          for path in pages.glob("*.razor"):
+              if path.name in {"Login.razor", "Error.razor"}:
+                  continue
+              lines = path.read_text(encoding="utf-8-sig").splitlines()
+              page_lines = [line.strip() for line in lines if line.strip().startswith("@page ")]
+              remaining = [line for line in lines if not line.strip().startswith("@page ") and line.strip() != "@attribute [Authorize]"]
+              while remaining and not remaining[0].strip():
+                  remaining.pop(0)
+              path.write_text("\n".join(page_lines + ["@attribute [Authorize]"] + remaining).rstrip() + "\n", encoding="utf-8")
+
+          errors = []
+          for path in pages.glob("*.razor"):
+              for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                  if re.match(r"^\s+@(page|attribute|inject|using|namespace)", line):
+                      errors.append(f"{path}:{number}: indented directive")
+          if errors:
+              raise SystemExit("\n".join(errors))
+          PY
+
+      - name: Verify Razor headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in src/Outfitters.Web/Components/Pages/*.razor; do echo "---- $file"; sed -n '1,4p' "$file"; done
+          if grep -RInE '^[[:space:]]+@(page|attribute|inject|using|namespace)' src/Outfitters.Web --include='*.razor'; then exit 1; fi
+
+      - name: Restore build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore OutfittersRetailManagementSystem.sln
+          dotnet build OutfittersRetailManagementSystem.sln --configuration Release --no-restore
+          dotnet test OutfittersRetailManagementSystem.sln --configuration Release --no-build
+
+      - name: Commit Milestone 15.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/Outfitters.Web
+          if git diff --cached --quiet; then echo "Milestone 15.1 already committed."; exit 0; fi
+          git commit -m "Milestone 15.1 - Rebuild clean web authentication foundation"
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git rebase origin/main
+            if git push origin HEAD:main; then exit 0; fi
+            if [ "$attempt" -lt 3 ]; then sleep 5; fi
+          done
+          exit 1
