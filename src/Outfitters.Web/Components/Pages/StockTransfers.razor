@@ -1,0 +1,139 @@
+@page "/inventory/transfers"
+@attribute [Authorize(Roles = "Administrator,Manager,InventoryStaff")]
+@inject IRetailApiClient RetailApi
+@inject IRetailOperationsApiClient OperationsApi
+
+<PageTitle>Stock Transfers - OUTFITTERS</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">Multi-store inventory</span>
+        <h1>Stock Transfers</h1>
+        <p>Move stock between store locations.</p>
+    </div>
+</div>
+
+<section class="page-card transfer-form">
+    <div class="form-grid">
+        <label>
+            Source store
+            <select @bind="_sourceStoreId">
+                <option value="">Select source</option>
+                @foreach (var store in _stores)
+                {
+                    <option value="@store.Id">@store.Name</option>
+                }
+            </select>
+        </label>
+
+        <label>
+            Destination store
+            <select @bind="_destinationStoreId">
+                <option value="">Select destination</option>
+                @foreach (var store in _stores)
+                {
+                    <option value="@store.Id">@store.Name</option>
+                }
+            </select>
+        </label>
+    </div>
+
+    <label>
+        Product variant ID
+        <input @bind="_productVariantIdText" />
+    </label>
+
+    <label>
+        Quantity
+        <input type="number" min="1" step="1" @bind="_quantity" />
+    </label>
+
+    <label>
+        Notes
+        <textarea rows="3" @bind="_notes"></textarea>
+    </label>
+
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="@(_success ? "success-message" : "error-message")">
+            @_message
+        </div>
+    }
+
+    <button
+        type="button"
+        class="primary-button"
+        disabled="@_submitting"
+        @onclick="SubmitAsync">
+        @(_submitting ? "Creating..." : "Create Transfer")
+    </button>
+</section>
+
+@code {
+    private IReadOnlyCollection<StoreListItem> _stores =
+        Array.Empty<StoreListItem>();
+
+    private Guid? _sourceStoreId;
+    private Guid? _destinationStoreId;
+    private string _productVariantIdText = string.Empty;
+    private decimal _quantity = 1m;
+    private string _notes = string.Empty;
+    private string? _message;
+    private bool _success;
+    private bool _submitting;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _stores = await RetailApi.GetStoresAsync();
+    }
+
+    private async Task SubmitAsync()
+    {
+        _message = null;
+        _success = false;
+
+        if (!_sourceStoreId.HasValue ||
+            !_destinationStoreId.HasValue)
+        {
+            _message = "Select both stores.";
+            return;
+        }
+
+        if (_sourceStoreId == _destinationStoreId)
+        {
+            _message = "The stores must be different.";
+            return;
+        }
+
+        if (!Guid.TryParse(
+            _productVariantIdText,
+            out var productVariantId))
+        {
+            _message = "Enter a valid product variant ID.";
+            return;
+        }
+
+        _submitting = true;
+
+        _success = await OperationsApi.CreateStockTransferAsync(
+            new StockTransferRequest
+            {
+                SourceStoreId = _sourceStoreId.Value,
+                DestinationStoreId = _destinationStoreId.Value,
+                Notes = _notes,
+                Lines = new[]
+                {
+                    new StockTransferLineRequest
+                    {
+                        ProductVariantId = productVariantId,
+                        Quantity = _quantity
+                    }
+                }
+            });
+
+        _submitting = false;
+        _message = _success
+            ? "Stock transfer created."
+            : "The transfer could not be created.";
+    }
+}
