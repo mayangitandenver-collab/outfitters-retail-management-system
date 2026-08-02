@@ -49,6 +49,13 @@ public sealed class ApplicationDbContext
     public DbSet<EmployeeAttendance> EmployeeAttendanceRecords => Set<EmployeeAttendance>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
+              public DbSet<GeneralLedgerAccount> GeneralLedgerAccounts => Set<GeneralLedgerAccount>();
+    public DbSet<JournalEntry> JournalEntries => Set<JournalEntry>();
+    public DbSet<JournalEntryLine> JournalEntryLines => Set<JournalEntryLine>();
+    public DbSet<AccountsPayable> AccountsPayables => Set<AccountsPayable>();
+    public DbSet<AccountsReceivable> AccountsReceivables => Set<AccountsReceivable>();
+    public DbSet<ExpenseRecord> ExpenseRecords => Set<ExpenseRecord>();
+
 protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
@@ -458,6 +465,79 @@ protected override void OnModelCreating(ModelBuilder builder)
             entity.Property(x => x.UserAgent).HasMaxLength(1000);
             entity.HasOne(x => x.User).WithMany()
                 .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        builder.Entity<GeneralLedgerAccount>(entity =>
+        {
+            entity.HasIndex(x => x.AccountCode).IsUnique();
+            entity.Property(x => x.AccountCode).HasMaxLength(30).IsRequired();
+            entity.Property(x => x.AccountName).HasMaxLength(200).IsRequired();
+            entity.HasOne(x => x.ParentAccount).WithMany(x => x.ChildAccounts)
+                .HasForeignKey(x => x.ParentAccountId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<JournalEntry>(entity =>
+        {
+            entity.HasIndex(x => x.EntryNumber).IsUnique();
+            entity.Property(x => x.EntryNumber).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.Description).HasMaxLength(500).IsRequired();
+            entity.HasOne(x => x.Store).WithMany()
+                .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(x => x.CreatedByUser).WithMany()
+                .HasForeignKey(x => x.CreatedByUserId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.PostedByUser).WithMany()
+                .HasForeignKey(x => x.PostedByUserId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        builder.Entity<JournalEntryLine>(entity =>
+        {
+            entity.Property(x => x.DebitAmount).HasPrecision(18, 2);
+            entity.Property(x => x.CreditAmount).HasPrecision(18, 2);
+            entity.HasOne(x => x.JournalEntry).WithMany(x => x.Lines)
+                .HasForeignKey(x => x.JournalEntryId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.GeneralLedgerAccount).WithMany()
+                .HasForeignKey(x => x.GeneralLedgerAccountId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<AccountsPayable>(entity =>
+        {
+            entity.HasIndex(x => x.PayableNumber).IsUnique();
+            entity.Property(x => x.PayableNumber).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.OriginalAmount).HasPrecision(18, 2);
+            entity.Property(x => x.PaidAmount).HasPrecision(18, 2);
+            entity.Property(x => x.BalanceAmount).HasPrecision(18, 2);
+            entity.HasOne(x => x.Supplier).WithMany()
+                .HasForeignKey(x => x.SupplierId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.PurchaseOrder).WithMany()
+                .HasForeignKey(x => x.PurchaseOrderId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        builder.Entity<AccountsReceivable>(entity =>
+        {
+            entity.HasIndex(x => x.ReceivableNumber).IsUnique();
+            entity.Property(x => x.ReceivableNumber).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.OriginalAmount).HasPrecision(18, 2);
+            entity.Property(x => x.CollectedAmount).HasPrecision(18, 2);
+            entity.Property(x => x.BalanceAmount).HasPrecision(18, 2);
+            entity.HasOne(x => x.Customer).WithMany()
+                .HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(x => x.Sale).WithMany()
+                .HasForeignKey(x => x.SaleId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        builder.Entity<ExpenseRecord>(entity =>
+        {
+            entity.HasIndex(x => x.ExpenseNumber).IsUnique();
+            entity.Property(x => x.ExpenseNumber).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.Amount).HasPrecision(18, 2);
+            entity.Property(x => x.TaxAmount).HasPrecision(18, 2);
+            entity.Property(x => x.Description).HasMaxLength(500).IsRequired();
+            entity.HasOne(x => x.Store).WithMany()
+                .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.ExpenseAccount).WithMany()
+                .HasForeignKey(x => x.ExpenseAccountId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.CreatedByUser).WithMany()
+                .HasForeignKey(x => x.CreatedByUserId).OnDelete(DeleteBehavior.Restrict);
         });
 }
 }
