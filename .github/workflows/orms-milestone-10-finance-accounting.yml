@@ -275,7 +275,7 @@ jobs:
               public DbSet<AccountsReceivable> AccountsReceivables => Set<AccountsReceivable>();
               public DbSet<ExpenseRecord> ExpenseRecords => Set<ExpenseRecord>();
 
-"""
+          """
 
           if "DbSet<GeneralLedgerAccount>" not in text:
               method_index = text.find("protected override void OnModelCreating")
@@ -356,7 +356,7 @@ jobs:
                       entity.HasOne(x => x.CreatedByUser).WithMany()
                           .HasForeignKey(x => x.CreatedByUserId).OnDelete(DeleteBehavior.Restrict);
                   });
-"""
+          """
 
           if "builder.Entity<GeneralLedgerAccount>" not in text:
               method_match = re.search(
