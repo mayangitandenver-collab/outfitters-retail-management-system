@@ -1,0 +1,714 @@
+name: ORMS Milestone 11 - Notifications Integrations Barcode and Receipts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  milestone11:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Write integration domain model
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p src/Outfitters.Domain/Entities
+          mkdir -p src/Outfitters.Domain/Enums
+          mkdir -p src/Outfitters.Application/Integrations
+          mkdir -p src/Outfitters.Infrastructure/Integrations
+          mkdir -p src/Outfitters.API/Controllers
+
+          cat > src/Outfitters.Domain/Enums/NotificationChannel.cs <<'EOF'
+          namespace Outfitters.Domain.Enums;
+
+          public enum NotificationChannel
+          {
+              Email = 1,
+              Sms = 2,
+              InApp = 3,
+              Webhook = 4
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Enums/NotificationStatus.cs <<'EOF'
+          namespace Outfitters.Domain.Enums;
+
+          public enum NotificationStatus
+          {
+              Pending = 1,
+              Processing = 2,
+              Sent = 3,
+              Failed = 4,
+              Cancelled = 5
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Enums/ReceiptPrintStatus.cs <<'EOF'
+          namespace Outfitters.Domain.Enums;
+
+          public enum ReceiptPrintStatus
+          {
+              Pending = 1,
+              Printing = 2,
+              Printed = 3,
+              Failed = 4,
+              Cancelled = 5
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/NotificationMessage.cs <<'EOF'
+          using Outfitters.Domain.Common;
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class NotificationMessage : BaseEntity
+          {
+              public NotificationChannel Channel { get; set; }
+              public NotificationStatus Status { get; set; } = NotificationStatus.Pending;
+              public string Recipient { get; set; } = string.Empty;
+              public string Subject { get; set; } = string.Empty;
+              public string Body { get; set; } = string.Empty;
+              public string? TemplateCode { get; set; }
+              public string? ReferenceType { get; set; }
+              public string? ReferenceId { get; set; }
+              public DateTime? ScheduledAtUtc { get; set; }
+              public DateTime? SentAtUtc { get; set; }
+              public int AttemptCount { get; set; }
+              public string? LastError { get; set; }
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/IntegrationSetting.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class IntegrationSetting : BaseEntity
+          {
+              public string ProviderCode { get; set; } = string.Empty;
+              public string SettingKey { get; set; } = string.Empty;
+              public string SettingValue { get; set; } = string.Empty;
+              public bool IsSecret { get; set; }
+              public bool IsEnabled { get; set; } = true;
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/ReceiptPrintJob.cs <<'EOF'
+          using Outfitters.Domain.Common;
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class ReceiptPrintJob : BaseEntity
+          {
+              public Guid SaleId { get; set; }
+              public Sale Sale { get; set; } = null!;
+              public Guid StoreId { get; set; }
+              public Store Store { get; set; } = null!;
+              public string PrinterName { get; set; } = string.Empty;
+              public string PrinterProtocol { get; set; } = "ESC/POS";
+              public ReceiptPrintStatus Status { get; set; } = ReceiptPrintStatus.Pending;
+              public string ReceiptPayload { get; set; } = string.Empty;
+              public int CopyCount { get; set; } = 1;
+              public int AttemptCount { get; set; }
+              public DateTime? PrintedAtUtc { get; set; }
+              public string? LastError { get; set; }
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/BarcodeAlias.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class BarcodeAlias : BaseEntity
+          {
+              public Guid ProductVariantId { get; set; }
+              public ProductVariant ProductVariant { get; set; } = null!;
+              public string Barcode { get; set; } = string.Empty;
+              public string BarcodeType { get; set; } = "CODE128";
+              public bool IsPrimary { get; set; }
+              public bool IsActive { get; set; } = true;
+          }
+          EOF
+
+      - name: Write integration contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Application/Integrations/IntegrationContracts.cs <<'EOF'
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Application.Integrations;
+
+          public sealed record QueueNotificationRequest(
+              NotificationChannel Channel,
+              string Recipient,
+              string Subject,
+              string Body,
+              string? TemplateCode,
+              string? ReferenceType,
+              string? ReferenceId,
+              DateTime? ScheduledAtUtc);
+
+          public sealed record CreateBarcodeAliasRequest(
+              Guid ProductVariantId,
+              string Barcode,
+              string BarcodeType,
+              bool IsPrimary);
+
+          public sealed record QueueReceiptPrintRequest(
+              Guid SaleId,
+              string PrinterName,
+              int CopyCount);
+
+          public sealed record UpdateIntegrationSettingRequest(
+              string ProviderCode,
+              string SettingKey,
+              string SettingValue,
+              bool IsSecret,
+              bool IsEnabled);
+          EOF
+
+      - name: Write barcode and receipt services
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Infrastructure/Integrations/BarcodeService.cs <<'EOF'
+          using System.Text.RegularExpressions;
+
+          namespace Outfitters.Infrastructure.Integrations;
+
+          public interface IBarcodeService
+          {
+              bool IsValid(string barcode, string barcodeType);
+              string Normalize(string barcode);
+          }
+
+          public sealed class BarcodeService : IBarcodeService
+          {
+              public string Normalize(string barcode) =>
+                  Regex.Replace(barcode.Trim(), @"\s+", string.Empty);
+
+              public bool IsValid(string barcode, string barcodeType)
+              {
+                  var value = Normalize(barcode);
+                  if (string.IsNullOrWhiteSpace(value))
+                  {
+                      return false;
+                  }
+
+                  return barcodeType.Trim().ToUpperInvariant() switch
+                  {
+                      "EAN13" => Regex.IsMatch(value, @"^\d{13}$"),
+                      "EAN8" => Regex.IsMatch(value, @"^\d{8}$"),
+                      "UPC" => Regex.IsMatch(value, @"^\d{12}$"),
+                      "CODE128" => value.Length is >= 4 and <= 80,
+                      _ => value.Length is >= 4 and <= 100
+                  };
+              }
+          }
+          EOF
+
+          cat > src/Outfitters.Infrastructure/Integrations/EscPosReceiptFormatter.cs <<'EOF'
+          using System.Globalization;
+          using System.Text;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.Infrastructure.Integrations;
+
+          public interface IReceiptFormatter
+          {
+              Task<string> FormatSaleAsync(
+                  Guid saleId,
+                  CancellationToken cancellationToken = default);
+          }
+
+          public sealed class EscPosReceiptFormatter : IReceiptFormatter
+          {
+              private readonly ApplicationDbContext _db;
+
+              public EscPosReceiptFormatter(ApplicationDbContext db) => _db = db;
+
+              public async Task<string> FormatSaleAsync(
+                  Guid saleId,
+                  CancellationToken cancellationToken = default)
+              {
+                  var sale = await _db.Sales
+                      .AsNoTracking()
+                      .Include(x => x.Store)
+                      .Include(x => x.Items)
+                          .ThenInclude(x => x.ProductVariant)
+                          .ThenInclude(x => x.Product)
+                      .SingleOrDefaultAsync(x => x.Id == saleId, cancellationToken);
+
+                  if (sale is null)
+                  {
+                      throw new InvalidOperationException("Sale was not found.");
+                  }
+
+                  var builder = new StringBuilder();
+                  builder.AppendLine("\u001b@");
+                  builder.AppendLine("\u001ba\u0001");
+                  builder.AppendLine(sale.Store.Name);
+                  builder.AppendLine("OUTFITTERS");
+                  builder.AppendLine("--------------------------------");
+                  builder.AppendLine($"\u001ba\u0000Receipt: {sale.ReceiptNumber}");
+                  builder.AppendLine($"Date: {sale.CreatedAtUtc:yyyy-MM-dd HH:mm}");
+                  builder.AppendLine("--------------------------------");
+
+                  foreach (var item in sale.Items)
+                  {
+                      builder.AppendLine(item.ProductVariant.Product.Name);
+                      builder.AppendLine(
+                          $"{item.Quantity:0.###} x {item.UnitPrice.ToString("N2", CultureInfo.InvariantCulture)}  {item.LineTotal.ToString("N2", CultureInfo.InvariantCulture)}");
+                  }
+
+                  builder.AppendLine("--------------------------------");
+                  builder.AppendLine($"TOTAL: {sale.GrandTotal.ToString("N2", CultureInfo.InvariantCulture)}");
+                  builder.AppendLine();
+                  builder.AppendLine("\u001ba\u0001Thank you!");
+                  builder.AppendLine("\u001dV\u0000");
+
+                  return builder.ToString();
+              }
+          }
+          EOF
+
+      - name: Extend database context for integrations
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("src/Outfitters.Infrastructure/Persistence/ApplicationDbContext.cs")
+          text = path.read_text()
+
+          dbsets = """              public DbSet<NotificationMessage> NotificationMessages => Set<NotificationMessage>();
+              public DbSet<IntegrationSetting> IntegrationSettings => Set<IntegrationSetting>();
+              public DbSet<ReceiptPrintJob> ReceiptPrintJobs => Set<ReceiptPrintJob>();
+              public DbSet<BarcodeAlias> BarcodeAliases => Set<BarcodeAlias>();
+
+          """
+
+          if "DbSet<NotificationMessage>" not in text:
+              method_index = text.find("protected override void OnModelCreating")
+              if method_index == -1:
+                  raise SystemExit("OnModelCreating method not found")
+              text = text[:method_index] + dbsets + text[method_index:]
+
+          config = """
+                  builder.Entity<NotificationMessage>(entity =>
+                  {
+                      entity.HasIndex(x => new { x.Status, x.ScheduledAtUtc });
+                      entity.Property(x => x.Recipient).HasMaxLength(500).IsRequired();
+                      entity.Property(x => x.Subject).HasMaxLength(500).IsRequired();
+                      entity.Property(x => x.TemplateCode).HasMaxLength(100);
+                      entity.Property(x => x.ReferenceType).HasMaxLength(100);
+                      entity.Property(x => x.ReferenceId).HasMaxLength(100);
+                  });
+
+                  builder.Entity<IntegrationSetting>(entity =>
+                  {
+                      entity.HasIndex(x => new { x.ProviderCode, x.SettingKey }).IsUnique();
+                      entity.Property(x => x.ProviderCode).HasMaxLength(100).IsRequired();
+                      entity.Property(x => x.SettingKey).HasMaxLength(150).IsRequired();
+                  });
+
+                  builder.Entity<ReceiptPrintJob>(entity =>
+                  {
+                      entity.HasIndex(x => new { x.Status, x.CreatedAtUtc });
+                      entity.Property(x => x.PrinterName).HasMaxLength(250).IsRequired();
+                      entity.Property(x => x.PrinterProtocol).HasMaxLength(50).IsRequired();
+                      entity.HasOne(x => x.Sale).WithMany()
+                          .HasForeignKey(x => x.SaleId).OnDelete(DeleteBehavior.Cascade);
+                      entity.HasOne(x => x.Store).WithMany()
+                          .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<BarcodeAlias>(entity =>
+                  {
+                      entity.HasIndex(x => x.Barcode).IsUnique();
+                      entity.HasIndex(x => new { x.ProductVariantId, x.IsPrimary });
+                      entity.Property(x => x.Barcode).HasMaxLength(100).IsRequired();
+                      entity.Property(x => x.BarcodeType).HasMaxLength(30).IsRequired();
+                      entity.HasOne(x => x.ProductVariant).WithMany()
+                          .HasForeignKey(x => x.ProductVariantId).OnDelete(DeleteBehavior.Cascade);
+                  });
+          """
+
+          if "builder.Entity<NotificationMessage>" not in text:
+              method_match = re.search(
+                  r"protected\s+override\s+void\s+OnModelCreating\s*\([^)]*\)\s*\{",
+                  text
+              )
+              if not method_match:
+                  raise SystemExit("OnModelCreating opening brace not found")
+
+              opening_brace = text.find("{", method_match.start())
+              depth = 0
+              closing_brace = None
+
+              for index in range(opening_brace, len(text)):
+                  char = text[index]
+                  if char == "{":
+                      depth += 1
+                  elif char == "}":
+                      depth -= 1
+                      if depth == 0:
+                          closing_brace = index
+                          break
+
+              if closing_brace is None:
+                  raise SystemExit("OnModelCreating closing brace not found")
+
+              text = text[:closing_brace] + config + text[closing_brace:]
+
+          path.write_text(text)
+          PY
+
+      - name: Register integration services
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/Outfitters.API/Program.cs")
+          text = path.read_text()
+
+          using_line = "using Outfitters.Infrastructure.Integrations;\n"
+          if using_line not in text:
+              text = using_line + text
+
+          registrations = """builder.Services.AddScoped<IBarcodeService, BarcodeService>();
+          builder.Services.AddScoped<IReceiptFormatter, EscPosReceiptFormatter>();
+          """
+
+          if "AddScoped<IBarcodeService" not in text:
+              anchor = "var app = builder.Build();"
+              index = text.find(anchor)
+              if index == -1:
+                  raise SystemExit("Program.cs app-build anchor not found")
+              text = text[:index] + registrations + "\n" + text[index:]
+
+          path.write_text(text)
+          PY
+
+      - name: Write integrations controller
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.API/Controllers/IntegrationsController.cs <<'EOF'
+          using Microsoft.AspNetCore.Authorization;
+          using Microsoft.AspNetCore.Mvc;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Application.Integrations;
+          using Outfitters.Domain.Entities;
+          using Outfitters.Infrastructure.Integrations;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.API.Controllers;
+
+          [ApiController]
+          [Authorize]
+          [Route("api/integrations")]
+          public sealed class IntegrationsController : ControllerBase
+          {
+              private readonly ApplicationDbContext _db;
+              private readonly IBarcodeService _barcodeService;
+              private readonly IReceiptFormatter _receiptFormatter;
+
+              public IntegrationsController(
+                  ApplicationDbContext db,
+                  IBarcodeService barcodeService,
+                  IReceiptFormatter receiptFormatter)
+              {
+                  _db = db;
+                  _barcodeService = barcodeService;
+                  _receiptFormatter = receiptFormatter;
+              }
+
+              [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager,Cashier")]
+              [HttpPost("barcodes")]
+              public async Task<IActionResult> CreateBarcode(
+                  CreateBarcodeAliasRequest request)
+              {
+                  var barcode = _barcodeService.Normalize(request.Barcode);
+
+                  if (!_barcodeService.IsValid(barcode, request.BarcodeType))
+                  {
+                      return BadRequest("Barcode format is invalid.");
+                  }
+
+                  if (!await _db.ProductVariants.AnyAsync(x =>
+                      x.Id == request.ProductVariantId))
+                  {
+                      return NotFound("Product variant was not found.");
+                  }
+
+                  if (await _db.BarcodeAliases.AnyAsync(x => x.Barcode == barcode))
+                  {
+                      return Conflict("Barcode already exists.");
+                  }
+
+                  if (request.IsPrimary)
+                  {
+                      var currentPrimary = await _db.BarcodeAliases
+                          .Where(x =>
+                              x.ProductVariantId == request.ProductVariantId &&
+                              x.IsPrimary)
+                          .ToListAsync();
+
+                      foreach (var item in currentPrimary)
+                      {
+                          item.IsPrimary = false;
+                      }
+                  }
+
+                  var alias = new BarcodeAlias
+                  {
+                      ProductVariantId = request.ProductVariantId,
+                      Barcode = barcode,
+                      BarcodeType = request.BarcodeType.Trim().ToUpperInvariant(),
+                      IsPrimary = request.IsPrimary
+                  };
+
+                  _db.BarcodeAliases.Add(alias);
+                  await _db.SaveChangesAsync();
+
+                  return Ok(alias);
+              }
+
+              [HttpGet("barcodes/{barcode}")]
+              public async Task<IActionResult> LookupBarcode(string barcode)
+              {
+                  var normalized = _barcodeService.Normalize(barcode);
+
+                  var result = await _db.BarcodeAliases
+                      .AsNoTracking()
+                      .Where(x => x.Barcode == normalized && x.IsActive)
+                      .Select(x => new
+                      {
+                          x.Id,
+                          x.Barcode,
+                          x.BarcodeType,
+                          x.ProductVariantId,
+                          ProductName = x.ProductVariant.Product.Name,
+                          x.ProductVariant.Sku,
+                          x.ProductVariant.RetailPrice,
+                          x.IsPrimary
+                      })
+                      .SingleOrDefaultAsync();
+
+                  return result is null ? NotFound() : Ok(result);
+              }
+
+              [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager,Cashier")]
+              [HttpPost("receipts/queue")]
+              public async Task<IActionResult> QueueReceipt(
+                  QueueReceiptPrintRequest request)
+              {
+                  var sale = await _db.Sales
+                      .AsNoTracking()
+                      .SingleOrDefaultAsync(x => x.Id == request.SaleId);
+
+                  if (sale is null)
+                  {
+                      return NotFound("Sale was not found.");
+                  }
+
+                  var payload = await _receiptFormatter.FormatSaleAsync(request.SaleId);
+
+                  var printJob = new ReceiptPrintJob
+                  {
+                      SaleId = sale.Id,
+                      StoreId = sale.StoreId,
+                      PrinterName = request.PrinterName.Trim(),
+                      CopyCount = Math.Clamp(request.CopyCount, 1, 5),
+                      ReceiptPayload = payload
+                  };
+
+                  _db.ReceiptPrintJobs.Add(printJob);
+                  await _db.SaveChangesAsync();
+
+                  return Ok(new
+                  {
+                      printJob.Id,
+                      printJob.Status,
+                      printJob.PrinterName,
+                      printJob.CopyCount
+                  });
+              }
+
+              [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager")]
+              [HttpPost("notifications")]
+              public async Task<IActionResult> QueueNotification(
+                  QueueNotificationRequest request)
+              {
+                  var message = new NotificationMessage
+                  {
+                      Channel = request.Channel,
+                      Recipient = request.Recipient.Trim(),
+                      Subject = request.Subject.Trim(),
+                      Body = request.Body,
+                      TemplateCode = request.TemplateCode?.Trim(),
+                      ReferenceType = request.ReferenceType?.Trim(),
+                      ReferenceId = request.ReferenceId?.Trim(),
+                      ScheduledAtUtc = request.ScheduledAtUtc
+                  };
+
+                  _db.NotificationMessages.Add(message);
+                  await _db.SaveChangesAsync();
+
+                  return Ok(new
+                  {
+                      message.Id,
+                      message.Status,
+                      message.ScheduledAtUtc
+                  });
+              }
+
+              [Authorize(Roles = "SuperAdministrator,Administrator")]
+              [HttpPut("settings")]
+              public async Task<IActionResult> UpdateSetting(
+                  UpdateIntegrationSettingRequest request)
+              {
+                  var provider = request.ProviderCode.Trim().ToUpperInvariant();
+                  var key = request.SettingKey.Trim();
+
+                  var setting = await _db.IntegrationSettings.SingleOrDefaultAsync(x =>
+                      x.ProviderCode == provider &&
+                      x.SettingKey == key);
+
+                  if (setting is null)
+                  {
+                      setting = new IntegrationSetting
+                      {
+                          ProviderCode = provider,
+                          SettingKey = key
+                      };
+                      _db.IntegrationSettings.Add(setting);
+                  }
+
+                  setting.SettingValue = request.SettingValue;
+                  setting.IsSecret = request.IsSecret;
+                  setting.IsEnabled = request.IsEnabled;
+                  setting.UpdatedAtUtc = DateTime.UtcNow;
+
+                  await _db.SaveChangesAsync();
+                  return NoContent();
+              }
+
+              [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager")]
+              [HttpGet("health")]
+              public async Task<IActionResult> Health()
+              {
+                  var result = new
+                  {
+                      Database = "Healthy",
+                      PendingNotifications = await _db.NotificationMessages.CountAsync(x =>
+                          x.Status == Domain.Enums.NotificationStatus.Pending),
+                      PendingPrintJobs = await _db.ReceiptPrintJobs.CountAsync(x =>
+                          x.Status == Domain.Enums.ReceiptPrintStatus.Pending),
+                      ActiveBarcodeAliases = await _db.BarcodeAliases.CountAsync(x =>
+                          x.IsActive),
+                      EnabledProviders = await _db.IntegrationSettings
+                          .Where(x => x.IsEnabled)
+                          .Select(x => x.ProviderCode)
+                          .Distinct()
+                          .ToListAsync()
+                  };
+
+                  return Ok(result);
+              }
+          }
+          EOF
+
+      - name: Compile before migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore OutfittersRetailManagementSystem.sln
+          dotnet build OutfittersRetailManagementSystem.sln --configuration Release --no-restore
+
+      - name: Create EF Core migration if missing
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet tool install --global dotnet-ef --version 9.0.*
+          export PATH="$PATH:$HOME/.dotnet/tools"
+
+          if find src/Outfitters.Infrastructure/Persistence/Migrations \
+              -type f -name '*_AddNotificationsIntegrationsBarcodeReceipts.cs' | grep -q .
+          then
+            echo "Milestone 11 migration already exists; skipping creation."
+          else
+            dotnet ef migrations add AddNotificationsIntegrationsBarcodeReceipts \
+              --project src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj \
+              --startup-project src/Outfitters.API/Outfitters.API.csproj \
+              --output-dir Persistence/Migrations
+          fi
+
+      - name: Build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet build OutfittersRetailManagementSystem.sln --configuration Release
+          dotnet test OutfittersRetailManagementSystem.sln --configuration Release --no-build
+
+      - name: Commit milestone 11
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src tests OutfittersRetailManagementSystem.sln Directory.Build.props docker-compose.yml global.json README.md .gitignore
+
+          if git diff --cached --quiet
+          then
+            echo "Milestone 11 files are already committed; nothing to push."
+            exit 0
+          fi
+
+          git commit -m "Milestone 11 - Add notifications integrations barcode and receipt support"
+
+          for attempt in 1 2 3
+          do
+            git fetch origin main
+            git rebase origin/main
+
+            if git push origin HEAD:main
+            then
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]
+            then
+              sleep 5
+            fi
+          done
+
+          echo "Unable to push Milestone 11 after three attempts."
+          exit 1
