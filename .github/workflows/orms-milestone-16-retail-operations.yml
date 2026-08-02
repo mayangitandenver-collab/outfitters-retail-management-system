@@ -1,0 +1,663 @@
+name: ORMS Milestone 16 - Retail Operations
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  milestone16:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Add retail operations models
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src/Outfitters.Web/Models
+          mkdir -p src/Outfitters.Web/Services
+          mkdir -p src/Outfitters.Web/Components/Pages
+
+          cat > src/Outfitters.Web/Models/RetailOperationsModels.cs <<'EOF'
+          namespace Outfitters.Web.Models;
+
+          public sealed class StockTransferRequest
+          {
+              public Guid SourceStoreId { get; set; }
+              public Guid DestinationStoreId { get; set; }
+              public string Notes { get; set; } = string.Empty;
+              public IReadOnlyCollection<StockTransferLineRequest> Lines { get; set; } =
+                  Array.Empty<StockTransferLineRequest>();
+          }
+
+          public sealed class StockTransferLineRequest
+          {
+              public Guid ProductVariantId { get; set; }
+              public decimal Quantity { get; set; }
+          }
+
+          public sealed class GiftCardLookupResult
+          {
+              public Guid Id { get; set; }
+              public string Code { get; set; } = string.Empty;
+              public decimal Balance { get; set; }
+              public bool IsActive { get; set; }
+          }
+
+          public sealed class SalesAnalyticsSummary
+          {
+              public decimal GrossSales { get; set; }
+              public decimal NetSales { get; set; }
+              public decimal Discounts { get; set; }
+              public decimal Returns { get; set; }
+              public decimal AverageBasketValue { get; set; }
+              public int TransactionCount { get; set; }
+          }
+          EOF
+
+      - name: Add retail operations API client
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Services/RetailOperationsApiClient.cs <<'EOF'
+          using System.Net.Http.Json;
+          using Outfitters.Web.Models;
+
+          namespace Outfitters.Web.Services;
+
+          public interface IRetailOperationsApiClient
+          {
+              Task<bool> CreateStockTransferAsync(
+                  StockTransferRequest request,
+                  CancellationToken cancellationToken = default);
+
+              Task<GiftCardLookupResult?> LookupGiftCardAsync(
+                  string code,
+                  CancellationToken cancellationToken = default);
+
+              Task<SalesAnalyticsSummary> GetSalesAnalyticsAsync(
+                  DateOnly from,
+                  DateOnly to,
+                  CancellationToken cancellationToken = default);
+          }
+
+          public sealed class RetailOperationsApiClient
+              : IRetailOperationsApiClient
+          {
+              private readonly HttpClient _httpClient;
+
+              public RetailOperationsApiClient(HttpClient httpClient)
+              {
+                  _httpClient = httpClient;
+              }
+
+              public async Task<bool> CreateStockTransferAsync(
+                  StockTransferRequest request,
+                  CancellationToken cancellationToken = default)
+              {
+                  using var response = await _httpClient.PostAsJsonAsync(
+                      "/api/stock-transfers",
+                      request,
+                      cancellationToken);
+
+                  return response.IsSuccessStatusCode;
+              }
+
+              public async Task<GiftCardLookupResult?> LookupGiftCardAsync(
+                  string code,
+                  CancellationToken cancellationToken = default)
+              {
+                  try
+                  {
+                      return await _httpClient.GetFromJsonAsync<GiftCardLookupResult>(
+                          $"/api/gift-cards/{Uri.EscapeDataString(code)}",
+                          cancellationToken);
+                  }
+                  catch
+                  {
+                      return null;
+                  }
+              }
+
+              public async Task<SalesAnalyticsSummary> GetSalesAnalyticsAsync(
+                  DateOnly from,
+                  DateOnly to,
+                  CancellationToken cancellationToken = default)
+              {
+                  var path =
+                      $"/api/reports/sales-analytics?from={from:yyyy-MM-dd}" +
+                      $"&to={to:yyyy-MM-dd}";
+
+                  try
+                  {
+                      return await _httpClient
+                          .GetFromJsonAsync<SalesAnalyticsSummary>(
+                              path,
+                              cancellationToken)
+                          ?? new SalesAnalyticsSummary();
+                  }
+                  catch
+                  {
+                      return new SalesAnalyticsSummary();
+                  }
+              }
+          }
+          EOF
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/Outfitters.Web/Program.cs")
+          text = path.read_text()
+
+          block = '''builder.Services
+              .AddHttpClient<IRetailOperationsApiClient, RetailOperationsApiClient>(client =>
+              {
+                  client.BaseAddress = new Uri(apiBaseUrl);
+                  client.Timeout = TimeSpan.FromSeconds(30);
+              })
+              .AddHttpMessageHandler<BearerTokenHandler>();
+
+          '''
+
+          if "IRetailOperationsApiClient" not in text:
+              marker = "var app = builder.Build();"
+              position = text.find(marker)
+              if position < 0:
+                  raise SystemExit("Program.cs build marker not found")
+              text = text[:position] + block + text[position:]
+
+          path.write_text(text)
+          PY
+
+      - name: Add stock transfer page
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Components/Pages/StockTransfers.razor <<'EOF'
+          @page "/inventory/transfers"
+          @attribute [Authorize(Roles = "Administrator,Manager,InventoryStaff")]
+          @inject IRetailApiClient RetailApi
+          @inject IRetailOperationsApiClient OperationsApi
+
+          <PageTitle>Stock Transfers - OUTFITTERS</PageTitle>
+
+          <div class="page-heading">
+              <div>
+                  <span class="eyebrow">Multi-store inventory</span>
+                  <h1>Stock Transfers</h1>
+                  <p>Move stock between store locations.</p>
+              </div>
+          </div>
+
+          <section class="page-card transfer-form">
+              <div class="form-grid">
+                  <label>
+                      Source store
+                      <select @bind="_sourceStoreId">
+                          <option value="">Select source</option>
+                          @foreach (var store in _stores)
+                          {
+                              <option value="@store.Id">@store.Name</option>
+                          }
+                      </select>
+                  </label>
+
+                  <label>
+                      Destination store
+                      <select @bind="_destinationStoreId">
+                          <option value="">Select destination</option>
+                          @foreach (var store in _stores)
+                          {
+                              <option value="@store.Id">@store.Name</option>
+                          }
+                      </select>
+                  </label>
+              </div>
+
+              <label>
+                  Product variant ID
+                  <input @bind="_productVariantIdText" />
+              </label>
+
+              <label>
+                  Quantity
+                  <input type="number" min="1" step="1" @bind="_quantity" />
+              </label>
+
+              <label>
+                  Notes
+                  <textarea rows="3" @bind="_notes"></textarea>
+              </label>
+
+              @if (!string.IsNullOrWhiteSpace(_message))
+              {
+                  <div class="@(_success ? "success-message" : "error-message")">
+                      @_message
+                  </div>
+              }
+
+              <button
+                  type="button"
+                  class="primary-button"
+                  disabled="@_submitting"
+                  @onclick="SubmitAsync">
+                  @(_submitting ? "Creating..." : "Create Transfer")
+              </button>
+          </section>
+
+          @code {
+              private IReadOnlyCollection<StoreListItem> _stores =
+                  Array.Empty<StoreListItem>();
+
+              private Guid? _sourceStoreId;
+              private Guid? _destinationStoreId;
+              private string _productVariantIdText = string.Empty;
+              private decimal _quantity = 1m;
+              private string _notes = string.Empty;
+              private string? _message;
+              private bool _success;
+              private bool _submitting;
+
+              protected override async Task OnInitializedAsync()
+              {
+                  _stores = await RetailApi.GetStoresAsync();
+              }
+
+              private async Task SubmitAsync()
+              {
+                  _message = null;
+                  _success = false;
+
+                  if (!_sourceStoreId.HasValue ||
+                      !_destinationStoreId.HasValue)
+                  {
+                      _message = "Select both stores.";
+                      return;
+                  }
+
+                  if (_sourceStoreId == _destinationStoreId)
+                  {
+                      _message = "The stores must be different.";
+                      return;
+                  }
+
+                  if (!Guid.TryParse(
+                      _productVariantIdText,
+                      out var productVariantId))
+                  {
+                      _message = "Enter a valid product variant ID.";
+                      return;
+                  }
+
+                  _submitting = true;
+
+                  _success = await OperationsApi.CreateStockTransferAsync(
+                      new StockTransferRequest
+                      {
+                          SourceStoreId = _sourceStoreId.Value,
+                          DestinationStoreId = _destinationStoreId.Value,
+                          Notes = _notes,
+                          Lines = new[]
+                          {
+                              new StockTransferLineRequest
+                              {
+                                  ProductVariantId = productVariantId,
+                                  Quantity = _quantity
+                              }
+                          }
+                      });
+
+                  _submitting = false;
+                  _message = _success
+                      ? "Stock transfer created."
+                      : "The transfer could not be created.";
+              }
+          }
+          EOF
+
+      - name: Add gift card page
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Components/Pages/GiftCards.razor <<'EOF'
+          @page "/customers/gift-cards"
+          @attribute [Authorize]
+          @inject IRetailOperationsApiClient OperationsApi
+
+          <PageTitle>Gift Cards - OUTFITTERS</PageTitle>
+
+          <div class="page-heading">
+              <div>
+                  <span class="eyebrow">Customer value</span>
+                  <h1>Gift Cards</h1>
+                  <p>Check a gift-card balance before payment.</p>
+              </div>
+          </div>
+
+          <section class="page-card gift-card-panel">
+              <label>
+                  Gift-card code
+                  <input @bind="_code" />
+              </label>
+
+              <button
+                  type="button"
+                  class="primary-button compact"
+                  @onclick="LookupAsync">
+                  Check Balance
+              </button>
+
+              @if (_result is not null)
+              {
+                  <div class="gift-card-result">
+                      <span>Code</span>
+                      <strong>@_result.Code</strong>
+                      <span>Balance</span>
+                      <strong>@_result.Balance.ToString("C")</strong>
+                      <span>Status</span>
+                      <strong>@(_result.IsActive ? "Active" : "Inactive")</strong>
+                  </div>
+              }
+              else if (!string.IsNullOrWhiteSpace(_message))
+              {
+                  <div class="error-message">@_message</div>
+              }
+          </section>
+
+          @code {
+              private string _code = string.Empty;
+              private GiftCardLookupResult? _result;
+              private string? _message;
+
+              private async Task LookupAsync()
+              {
+                  _message = null;
+                  _result = null;
+
+                  if (string.IsNullOrWhiteSpace(_code))
+                  {
+                      _message = "Enter a gift-card code.";
+                      return;
+                  }
+
+                  _result = await OperationsApi.LookupGiftCardAsync(_code);
+
+                  if (_result is null)
+                  {
+                      _message = "Gift card not found.";
+                  }
+              }
+          }
+          EOF
+
+      - name: Add sales analytics page
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Components/Pages/SalesAnalytics.razor <<'EOF'
+          @page "/reports/sales-analytics"
+          @attribute [Authorize(Roles = "Administrator,Manager,Accountant")]
+          @inject IRetailOperationsApiClient OperationsApi
+
+          <PageTitle>Sales Analytics - OUTFITTERS</PageTitle>
+
+          <div class="page-heading">
+              <div>
+                  <span class="eyebrow">Executive reporting</span>
+                  <h1>Sales Analytics</h1>
+                  <p>Review sales performance for a selected period.</p>
+              </div>
+
+              <button
+                  type="button"
+                  class="primary-button compact"
+                  @onclick="LoadAsync">
+                  Refresh
+              </button>
+          </div>
+
+          <section class="page-card">
+              <div class="form-grid">
+                  <label>
+                      From
+                      <InputDate @bind-Value="_from" />
+                  </label>
+
+                  <label>
+                      To
+                      <InputDate @bind-Value="_to" />
+                  </label>
+              </div>
+          </section>
+
+          <div class="metric-grid analytics-grid">
+              <article class="metric-card">
+                  <span>Gross Sales</span>
+                  <strong>@_summary.GrossSales.ToString("C")</strong>
+              </article>
+              <article class="metric-card">
+                  <span>Net Sales</span>
+                  <strong>@_summary.NetSales.ToString("C")</strong>
+              </article>
+              <article class="metric-card">
+                  <span>Discounts</span>
+                  <strong>@_summary.Discounts.ToString("C")</strong>
+              </article>
+              <article class="metric-card">
+                  <span>Returns</span>
+                  <strong>@_summary.Returns.ToString("C")</strong>
+              </article>
+              <article class="metric-card">
+                  <span>Average Basket</span>
+                  <strong>@_summary.AverageBasketValue.ToString("C")</strong>
+              </article>
+              <article class="metric-card">
+                  <span>Transactions</span>
+                  <strong>@_summary.TransactionCount</strong>
+              </article>
+          </div>
+
+          @code {
+              private DateTime _from = DateTime.Today.AddDays(-7);
+              private DateTime _to = DateTime.Today;
+              private SalesAnalyticsSummary _summary = new();
+
+              protected override async Task OnInitializedAsync()
+              {
+                  await LoadAsync();
+              }
+
+              private async Task LoadAsync()
+              {
+                  _summary = await OperationsApi.GetSalesAnalyticsAsync(
+                      DateOnly.FromDateTime(_from),
+                      DateOnly.FromDateTime(_to));
+              }
+          }
+          EOF
+
+      - name: Update navigation and styles
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/Outfitters.Web/Components/Layout/MainLayout.razor")
+          text = path.read_text()
+
+          replacements = [
+              (
+                  '<NavLink href="/inventory">Inventory</NavLink>',
+                  '<NavLink href="/inventory">Inventory</NavLink>\n'
+                  '                      <NavLink href="/inventory/transfers">'
+                  'Stock Transfers</NavLink>'
+              ),
+              (
+                  '<NavLink href="/customers">Customers</NavLink>',
+                  '<NavLink href="/customers">Customers</NavLink>\n'
+                  '                      <NavLink href="/customers/gift-cards">'
+                  'Gift Cards</NavLink>'
+              ),
+              (
+                  '<NavLink href="/reports">Reports</NavLink>',
+                  '<NavLink href="/reports">Reports</NavLink>\n'
+                  '                      <NavLink href="/reports/sales-analytics">'
+                  'Sales Analytics</NavLink>'
+              ),
+          ]
+
+          for old, new in replacements:
+              if new not in text:
+                  text = text.replace(old, new)
+
+          path.write_text(text)
+          PY
+
+          cat >> src/Outfitters.Web/wwwroot/css/site.css <<'EOF'
+
+          .transfer-form,
+          .gift-card-panel {
+              display: grid;
+              gap: 18px;
+          }
+
+          .form-grid {
+              display: grid;
+              grid-template-columns: repeat(2, minmax(0, 1fr));
+              gap: 16px;
+          }
+
+          .transfer-form label,
+          .gift-card-panel label,
+          .form-grid label {
+              display: grid;
+              gap: 8px;
+              color: #c6c8ce;
+          }
+
+          .transfer-form input,
+          .transfer-form select,
+          .transfer-form textarea,
+          .gift-card-panel input,
+          .form-grid input {
+              width: 100%;
+              padding: 12px 14px;
+              border: 1px solid #343740;
+              border-radius: 10px;
+              color: #fff;
+              background: #111317;
+          }
+
+          .gift-card-result {
+              display: grid;
+              grid-template-columns: auto 1fr;
+              gap: 10px 18px;
+              padding: 18px;
+              border: 1px solid #343740;
+              border-radius: 12px;
+              background: #111317;
+          }
+
+          .gift-card-result span {
+              color: #8f939d;
+          }
+
+          .analytics-grid {
+              margin-top: 18px;
+          }
+
+          @media (max-width: 760px) {
+              .form-grid {
+                  grid-template-columns: 1fr;
+              }
+          }
+          EOF
+
+      - name: Normalize Razor directives
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("src/Outfitters.Web")
+          pattern = re.compile(
+              r"^\s*@(page|attribute|inject|using|namespace|inherits|layout|"
+              r"implements|typeparam|rendermode)\b"
+          )
+
+          for path in root.rglob("*.razor"):
+              lines = path.read_text(encoding="utf-8-sig").splitlines()
+              normalized = [
+                  line.lstrip() if pattern.match(line) else line
+                  for line in lines
+              ]
+              path.write_text(
+                  "\n".join(normalized).rstrip() + "\n",
+                  encoding="utf-8"
+              )
+          PY
+
+      - name: Restore build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          dotnet restore OutfittersRetailManagementSystem.sln
+          dotnet build OutfittersRetailManagementSystem.sln             --configuration Release             --no-restore
+          dotnet test OutfittersRetailManagementSystem.sln             --configuration Release             --no-build
+
+      - name: Commit milestone 16
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email             "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add src/Outfitters.Web
+
+          if git diff --cached --quiet
+          then
+            echo "Milestone 16 is already committed."
+            exit 0
+          fi
+
+          git commit -m "Milestone 16 - Add retail operations workspaces"
+
+          for attempt in 1 2 3
+          do
+            git fetch origin main
+            git rebase origin/main
+
+            if git push origin HEAD:main
+            then
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]
+            then
+              sleep 5
+            fi
+          done
+
+          echo "Unable to push Milestone 16 after three attempts."
+          exit 1
