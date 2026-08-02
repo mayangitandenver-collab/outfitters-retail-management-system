@@ -1,0 +1,36 @@
+services:
+  database:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: outfitters
+      POSTGRES_USER: outfitters
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - outfitters_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U outfitters -d outfitters"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__DefaultConnection: Host=database;Port=5432;Database=outfitters;Username=outfitters;Password=${POSTGRES_PASSWORD}
+      Jwt__Key: ${JWT_KEY}
+      Jwt__Issuer: ${JWT_ISSUER:-Outfitters}
+      Jwt__Audience: ${JWT_AUDIENCE:-OutfittersClients}
+    ports:
+      - "${ORMS_PORT:-8080}:8080"
+
+volumes:
+  outfitters_postgres_data:
