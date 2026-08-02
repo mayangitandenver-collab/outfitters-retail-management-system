@@ -1,0 +1,71 @@
+@page "/login"
+@inject IApiClient ApiClient
+@inject NavigationManager Navigation
+
+<PageTitle>Login - OUTFITTERS</PageTitle>
+
+<div class="login-page">
+    <div class="login-panel">
+        <div class="brand login-brand">
+            <div class="brand-mark">O</div>
+            <div>
+                <strong>OUTFITTERS</strong>
+                <span>Retail Management System</span>
+            </div>
+        </div>
+
+        <h1>Welcome back</h1>
+        <p>Sign in to continue to your store dashboard.</p>
+
+        <EditForm Model="_request" OnValidSubmit="SubmitAsync">
+            <DataAnnotationsValidator />
+
+            <label>
+                Email address
+                <InputText @bind-Value="_request.Email" />
+            </label>
+
+            <label>
+                Password
+                <InputText @bind-Value="_request.Password" type="password" />
+            </label>
+
+            <label class="checkbox-row">
+                <InputCheckbox @bind-Value="_request.RememberMe" />
+                Remember me
+            </label>
+
+            @if (!string.IsNullOrWhiteSpace(_error))
+            {
+                <div class="error-message">@_error</div>
+            }
+
+            <button class="primary-button" disabled="@_busy">
+                @(_busy ? "Signing in..." : "Sign in")
+            </button>
+        </EditForm>
+    </div>
+</div>
+
+@code {
+    private readonly LoginRequest _request = new();
+    private bool _busy;
+    private string? _error;
+
+    private async Task SubmitAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        var result = await ApiClient.LoginAsync(_request);
+
+        if (result is null || string.IsNullOrWhiteSpace(result.AccessToken))
+        {
+            _error = "The email or password is incorrect.";
+            _busy = false;
+            return;
+        }
+
+        Navigation.NavigateTo("/");
+    }
+}
