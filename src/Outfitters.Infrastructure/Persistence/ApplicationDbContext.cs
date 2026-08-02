@@ -38,7 +38,13 @@ public sealed class ApplicationDbContext
     public DbSet<StockTransferReceipt> StockTransferReceipts => Set<StockTransferReceipt>();
     public DbSet<StockTransferReceiptItem> StockTransferReceiptItems => Set<StockTransferReceiptItem>();
 
-    protected override void OnModelCreating(ModelBuilder builder)
+                  public DbSet<CustomerTier> CustomerTiers => Set<CustomerTier>();
+    public DbSet<Customer> Customers => Set<Customer>();
+    public DbSet<LoyaltyTransaction> LoyaltyTransactions => Set<LoyaltyTransaction>();
+    public DbSet<CustomerVoucher> CustomerVouchers => Set<CustomerVoucher>();
+    public DbSet<CustomerFavoriteProduct> CustomerFavoriteProducts => Set<CustomerFavoriteProduct>();
+
+protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
 
@@ -343,5 +349,69 @@ public sealed class ApplicationDbContext
             entity.HasOne(x => x.ProductVariant).WithMany()
                 .HasForeignKey(x => x.ProductVariantId).OnDelete(DeleteBehavior.Restrict);
         });
-    }
+    
+        builder.Entity<CustomerTier>(entity =>
+        {
+            entity.HasIndex(x => x.Name).IsUnique();
+            entity.Property(x => x.Name).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.MinimumLifetimeSpend).HasPrecision(18, 2);
+            entity.Property(x => x.PointsMultiplier).HasPrecision(18, 2);
+            entity.Property(x => x.DefaultDiscountPercent).HasPrecision(5, 2);
+        });
+
+        builder.Entity<Customer>(entity =>
+        {
+            entity.HasIndex(x => x.CustomerNumber).IsUnique();
+            entity.HasIndex(x => x.Email);
+            entity.HasIndex(x => x.Phone);
+            entity.Property(x => x.CustomerNumber).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.FirstName).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.LastName).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.Email).HasMaxLength(250);
+            entity.Property(x => x.Phone).HasMaxLength(50);
+            entity.Property(x => x.LoyaltyPointsBalance).HasPrecision(18, 2);
+            entity.Property(x => x.StoreCreditBalance).HasPrecision(18, 2);
+            entity.Property(x => x.LifetimeSpend).HasPrecision(18, 2);
+            entity.HasOne(x => x.CustomerTier).WithMany(x => x.Customers)
+                .HasForeignKey(x => x.CustomerTierId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        builder.Entity<LoyaltyTransaction>(entity =>
+        {
+            entity.Property(x => x.PointsChange).HasPrecision(18, 2);
+            entity.Property(x => x.BalanceAfter).HasPrecision(18, 2);
+            entity.HasOne(x => x.Customer).WithMany(x => x.LoyaltyTransactions)
+                .HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.Sale).WithMany()
+                .HasForeignKey(x => x.SaleId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        builder.Entity<CustomerVoucher>(entity =>
+        {
+            entity.HasIndex(x => x.Code).IsUnique();
+            entity.Property(x => x.Code).HasMaxLength(80).IsRequired();
+            entity.Property(x => x.DiscountAmount).HasPrecision(18, 2);
+            entity.Property(x => x.DiscountPercent).HasPrecision(5, 2);
+            entity.Property(x => x.MinimumSpend).HasPrecision(18, 2);
+            entity.HasOne(x => x.Customer).WithMany(x => x.Vouchers)
+                .HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.RedeemedSale).WithMany()
+                .HasForeignKey(x => x.RedeemedSaleId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        builder.Entity<CustomerFavoriteProduct>(entity =>
+        {
+            entity.HasIndex(x => new { x.CustomerId, x.ProductId }).IsUnique();
+            entity.HasOne(x => x.Customer).WithMany(x => x.FavoriteProducts)
+                .HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.Product).WithMany()
+                .HasForeignKey(x => x.ProductId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<Sale>(entity =>
+        {
+            entity.HasOne(x => x.Customer).WithMany()
+                .HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.SetNull);
+        });
+}
 }
