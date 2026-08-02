@@ -1,0 +1,68 @@
+@page "/customers/gift-cards"
+@attribute [Authorize]
+@inject IRetailOperationsApiClient OperationsApi
+
+<PageTitle>Gift Cards - OUTFITTERS</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">Customer value</span>
+        <h1>Gift Cards</h1>
+        <p>Check a gift-card balance before payment.</p>
+    </div>
+</div>
+
+<section class="page-card gift-card-panel">
+    <label>
+        Gift-card code
+        <input @bind="_code" />
+    </label>
+
+    <button
+        type="button"
+        class="primary-button compact"
+        @onclick="LookupAsync">
+        Check Balance
+    </button>
+
+    @if (_result is not null)
+    {
+        <div class="gift-card-result">
+            <span>Code</span>
+            <strong>@_result.Code</strong>
+            <span>Balance</span>
+            <strong>@_result.Balance.ToString("C")</strong>
+            <span>Status</span>
+            <strong>@(_result.IsActive ? "Active" : "Inactive")</strong>
+        </div>
+    }
+    else if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="error-message">@_message</div>
+    }
+</section>
+
+@code {
+    private string _code = string.Empty;
+    private GiftCardLookupResult? _result;
+    private string? _message;
+
+    private async Task LookupAsync()
+    {
+        _message = null;
+        _result = null;
+
+        if (string.IsNullOrWhiteSpace(_code))
+        {
+            _message = "Enter a gift-card code.";
+            return;
+        }
+
+        _result = await OperationsApi.LookupGiftCardAsync(_code);
+
+        if (_result is null)
+        {
+            _message = "Gift card not found.";
+        }
+    }
+}

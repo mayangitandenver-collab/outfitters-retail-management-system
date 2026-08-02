@@ -1,0 +1,79 @@
+@page "/reports/sales-analytics"
+@attribute [Authorize(Roles = "Administrator,Manager,Accountant")]
+@inject IRetailOperationsApiClient OperationsApi
+
+<PageTitle>Sales Analytics - OUTFITTERS</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">Executive reporting</span>
+        <h1>Sales Analytics</h1>
+        <p>Review sales performance for a selected period.</p>
+    </div>
+
+    <button
+        type="button"
+        class="primary-button compact"
+        @onclick="LoadAsync">
+        Refresh
+    </button>
+</div>
+
+<section class="page-card">
+    <div class="form-grid">
+        <label>
+            From
+            <InputDate @bind-Value="_from" />
+        </label>
+
+        <label>
+            To
+            <InputDate @bind-Value="_to" />
+        </label>
+    </div>
+</section>
+
+<div class="metric-grid analytics-grid">
+    <article class="metric-card">
+        <span>Gross Sales</span>
+        <strong>@_summary.GrossSales.ToString("C")</strong>
+    </article>
+    <article class="metric-card">
+        <span>Net Sales</span>
+        <strong>@_summary.NetSales.ToString("C")</strong>
+    </article>
+    <article class="metric-card">
+        <span>Discounts</span>
+        <strong>@_summary.Discounts.ToString("C")</strong>
+    </article>
+    <article class="metric-card">
+        <span>Returns</span>
+        <strong>@_summary.Returns.ToString("C")</strong>
+    </article>
+    <article class="metric-card">
+        <span>Average Basket</span>
+        <strong>@_summary.AverageBasketValue.ToString("C")</strong>
+    </article>
+    <article class="metric-card">
+        <span>Transactions</span>
+        <strong>@_summary.TransactionCount</strong>
+    </article>
+</div>
+
+@code {
+    private DateTime _from = DateTime.Today.AddDays(-7);
+    private DateTime _to = DateTime.Today;
+    private SalesAnalyticsSummary _summary = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _summary = await OperationsApi.GetSalesAnalyticsAsync(
+            DateOnly.FromDateTime(_from),
+            DateOnly.FromDateTime(_to));
+    }
+}
