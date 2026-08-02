@@ -272,7 +272,9 @@ jobs:
                           path,
                           cancellationToken);
 
-                      return result ?? Array.Empty<T>();
+                      return result is null
+                          ? Array.Empty<T>()
+                          : result;
                   }
                   catch
                   {
@@ -306,12 +308,32 @@ jobs:
           path.write_text(text)
           PY
 
+      - name: Register shared Razor component namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/Outfitters.Web/Components/_Imports.razor")
+          text = path.read_text()
+          using_line = "@using Outfitters.Web.Components.Shared\n"
+
+          if using_line not in text:
+              text += using_line
+
+          path.write_text(text)
+          PY
+
       - name: Write shared table and status components
         shell: bash
         run: |
           set -euo pipefail
 
           cat > src/Outfitters.Web/Components/Shared/ModuleToolbar.razor <<'EOF'
+          @namespace Outfitters.Web.Components.Shared
+
           <div class="module-toolbar">
               <div class="toolbar-search">
                   <input
@@ -361,6 +383,8 @@ jobs:
           EOF
 
           cat > src/Outfitters.Web/Components/Shared/StatusBadge.razor <<'EOF'
+          @namespace Outfitters.Web.Components.Shared
+
           <span class="status-badge @CssClass">@Text</span>
 
           @code {
