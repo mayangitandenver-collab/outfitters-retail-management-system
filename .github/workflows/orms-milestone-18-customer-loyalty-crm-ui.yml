@@ -1,0 +1,776 @@
+name: ORMS Milestone 18 - Customer Loyalty and CRM
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  milestone18:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Add CRM web models
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p src/Outfitters.Web/Models
+          mkdir -p src/Outfitters.Web/Services
+          mkdir -p src/Outfitters.Web/Components/Pages
+
+          cat > src/Outfitters.Web/Models/CrmModels.cs <<'EOF'
+          namespace Outfitters.Web.Models;
+
+          public sealed class CrmDashboardSummary
+          {
+              public int TotalCustomers { get; set; }
+              public int NewCustomersThisMonth { get; set; }
+              public int ActiveCustomers { get; set; }
+              public int AtRiskCustomers { get; set; }
+              public int BirthdayCustomersThisMonth { get; set; }
+              public decimal TotalLifetimeValue { get; set; }
+              public decimal AverageCustomerSpend { get; set; }
+              public decimal LoyaltyPointsOutstanding { get; set; }
+
+              public IReadOnlyCollection<TopCustomerItem> TopCustomers { get; set; } =
+                  Array.Empty<TopCustomerItem>();
+
+              public IReadOnlyCollection<CustomerSegmentItem> Segments { get; set; } =
+                  Array.Empty<CustomerSegmentItem>();
+          }
+
+          public sealed class TopCustomerItem
+          {
+              public Guid CustomerId { get; set; }
+              public string CustomerNumber { get; set; } = string.Empty;
+              public string CustomerName { get; set; } = string.Empty;
+              public string TierName { get; set; } = string.Empty;
+              public decimal LifetimeSpend { get; set; }
+              public decimal LoyaltyPointsBalance { get; set; }
+              public decimal StoreCreditBalance { get; set; }
+              public int PurchaseCount { get; set; }
+              public DateTime? LastPurchaseAtUtc { get; set; }
+          }
+
+          public sealed class CustomerSegmentItem
+          {
+              public string SegmentName { get; set; } = string.Empty;
+              public int CustomerCount { get; set; }
+              public decimal TotalSpend { get; set; }
+              public decimal AverageSpend { get; set; }
+          }
+
+          public sealed class LoyaltyAdjustmentRequest
+          {
+              public Guid CustomerId { get; set; }
+              public decimal PointsChange { get; set; }
+              public string Notes { get; set; } = string.Empty;
+          }
+
+          public sealed class StoreCreditAdjustmentRequest
+          {
+              public Guid CustomerId { get; set; }
+              public decimal AmountChange { get; set; }
+              public string Notes { get; set; } = string.Empty;
+          }
+
+          public sealed class CustomerVoucherRequest
+          {
+              public Guid CustomerId { get; set; }
+              public decimal DiscountAmount { get; set; }
+              public decimal DiscountPercent { get; set; }
+              public decimal MinimumSpend { get; set; }
+              public DateTime ValidUntilUtc { get; set; }
+          }
+          EOF
+
+      - name: Add CRM API client
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Services/CrmApiClient.cs <<'EOF'
+          using System.Net.Http.Json;
+          using Outfitters.Web.Models;
+
+          namespace Outfitters.Web.Services;
+
+          public interface ICrmApiClient
+          {
+              Task<CrmDashboardSummary> GetDashboardAsync(
+                  CancellationToken cancellationToken = default);
+
+              Task<bool> AdjustLoyaltyAsync(
+                  LoyaltyAdjustmentRequest request,
+                  CancellationToken cancellationToken = default);
+
+              Task<bool> AdjustStoreCreditAsync(
+                  StoreCreditAdjustmentRequest request,
+                  CancellationToken cancellationToken = default);
+
+              Task<bool> CreateVoucherAsync(
+                  CustomerVoucherRequest request,
+                  CancellationToken cancellationToken = default);
+          }
+
+          public sealed class CrmApiClient : ICrmApiClient
+          {
+              private readonly HttpClient _httpClient;
+
+              public CrmApiClient(HttpClient httpClient)
+              {
+                  _httpClient = httpClient;
+              }
+
+              public async Task<CrmDashboardSummary> GetDashboardAsync(
+                  CancellationToken cancellationToken = default)
+              {
+                  try
+                  {
+                      return await _httpClient
+                          .GetFromJsonAsync<CrmDashboardSummary>(
+                              "/api/customer-reports/dashboard",
+                              cancellationToken)
+                          ?? new CrmDashboardSummary();
+                  }
+                  catch
+                  {
+                      return new CrmDashboardSummary();
+                  }
+              }
+
+              public async Task<bool> AdjustLoyaltyAsync(
+                  LoyaltyAdjustmentRequest request,
+                  CancellationToken cancellationToken = default)
+              {
+                  using var response = await _httpClient.PostAsJsonAsync(
+                      $"/api/customers/{request.CustomerId}/loyalty/adjust",
+                      new
+                      {
+                          request.PointsChange,
+                          request.Notes
+                      },
+                      cancellationToken);
+
+                  return response.IsSuccessStatusCode;
+              }
+
+              public async Task<bool> AdjustStoreCreditAsync(
+                  StoreCreditAdjustmentRequest request,
+                  CancellationToken cancellationToken = default)
+              {
+                  using var response = await _httpClient.PostAsJsonAsync(
+                      $"/api/customers/{request.CustomerId}/store-credit/adjust",
+                      new
+                      {
+                          request.AmountChange,
+                          request.Notes
+                      },
+                      cancellationToken);
+
+                  return response.IsSuccessStatusCode;
+              }
+
+              public async Task<bool> CreateVoucherAsync(
+                  CustomerVoucherRequest request,
+                  CancellationToken cancellationToken = default)
+              {
+                  using var response = await _httpClient.PostAsJsonAsync(
+                      $"/api/customers/{request.CustomerId}/vouchers",
+                      new
+                      {
+                          request.DiscountAmount,
+                          request.DiscountPercent,
+                          request.MinimumSpend,
+                          request.ValidUntilUtc
+                      },
+                      cancellationToken);
+
+                  return response.IsSuccessStatusCode;
+              }
+          }
+          EOF
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/Outfitters.Web/Program.cs")
+          text = path.read_text()
+
+          registration = """builder.Services
+              .AddHttpClient<ICrmApiClient, CrmApiClient>(client =>
+              {
+                  client.BaseAddress = new Uri(apiBaseUrl);
+                  client.Timeout = TimeSpan.FromSeconds(30);
+              })
+              .AddHttpMessageHandler<BearerTokenHandler>();
+
+          """
+
+          if "ICrmApiClient" not in text:
+              marker = "var app = builder.Build();"
+              index = text.find(marker)
+
+              if index == -1:
+                  raise SystemExit("Program.cs application marker not found")
+
+              text = text[:index] + registration + text[index:]
+
+          path.write_text(text)
+          PY
+
+      - name: Add CRM dashboard page
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Components/Pages/CrmDashboard.razor <<'EOF'
+          @page "/customers/crm"
+          @attribute [Authorize(Roles = "Administrator,Manager,Cashier")]
+          @inject ICrmApiClient CrmApi
+
+          <PageTitle>Customer Loyalty and CRM - OUTFITTERS</PageTitle>
+
+          <div class="page-heading">
+              <div>
+                  <span class="eyebrow">Customer growth</span>
+                  <h1>Customer Loyalty and CRM</h1>
+                  <p>Track retention, loyalty balances, customer value, and engagement.</p>
+              </div>
+
+              <button
+                  type="button"
+                  class="primary-button compact"
+                  @onclick="LoadAsync">
+                  Refresh
+              </button>
+          </div>
+
+          <div class="metric-grid">
+              <article class="metric-card">
+                  <span>Total Customers</span>
+                  <strong>@_summary.TotalCustomers</strong>
+              </article>
+
+              <article class="metric-card">
+                  <span>New This Month</span>
+                  <strong>@_summary.NewCustomersThisMonth</strong>
+              </article>
+
+              <article class="metric-card">
+                  <span>Active Customers</span>
+                  <strong>@_summary.ActiveCustomers</strong>
+              </article>
+
+              <article class="metric-card alert-card">
+                  <span>At-Risk Customers</span>
+                  <strong>@_summary.AtRiskCustomers</strong>
+              </article>
+
+              <article class="metric-card">
+                  <span>Birthday Customers</span>
+                  <strong>@_summary.BirthdayCustomersThisMonth</strong>
+              </article>
+
+              <article class="metric-card">
+                  <span>Average Spend</span>
+                  <strong>@_summary.AverageCustomerSpend.ToString("C")</strong>
+              </article>
+          </div>
+
+          <section class="page-card crm-section">
+              <div class="section-heading">
+                  <h2>Top Customers</h2>
+              </div>
+
+              <div class="data-table">
+                  <div class="table-row table-header crm-customer-table">
+                      <span>Customer</span>
+                      <span>Tier</span>
+                      <span>Lifetime Spend</span>
+                      <span>Purchases</span>
+                      <span>Points</span>
+                      <span>Store Credit</span>
+                  </div>
+
+                  @foreach (var item in _summary.TopCustomers)
+                  {
+                      <div class="table-row crm-customer-table">
+                          <span>
+                              <strong>@item.CustomerName</strong>
+                              <small>@item.CustomerNumber</small>
+                          </span>
+                          <span>@item.TierName</span>
+                          <span>@item.LifetimeSpend.ToString("C")</span>
+                          <span>@item.PurchaseCount</span>
+                          <span>@item.LoyaltyPointsBalance.ToString("0.##")</span>
+                          <span>@item.StoreCreditBalance.ToString("C")</span>
+                      </div>
+                  }
+
+                  @if (_summary.TopCustomers.Count == 0)
+                  {
+                      <div class="empty-state">No customer ranking data is available.</div>
+                  }
+              </div>
+          </section>
+
+          <section class="page-card crm-section">
+              <div class="section-heading">
+                  <h2>Customer Segments</h2>
+              </div>
+
+              <div class="data-table">
+                  <div class="table-row table-header crm-segment-table">
+                      <span>Segment</span>
+                      <span>Customers</span>
+                      <span>Total Spend</span>
+                      <span>Average Spend</span>
+                  </div>
+
+                  @foreach (var item in _summary.Segments)
+                  {
+                      <div class="table-row crm-segment-table">
+                          <strong>@item.SegmentName</strong>
+                          <span>@item.CustomerCount</span>
+                          <span>@item.TotalSpend.ToString("C")</span>
+                          <span>@item.AverageSpend.ToString("C")</span>
+                      </div>
+                  }
+
+                  @if (_summary.Segments.Count == 0)
+                  {
+                      <div class="empty-state">No customer segmentation data is available.</div>
+                  }
+              </div>
+          </section>
+
+          @code {
+              private CrmDashboardSummary _summary = new();
+
+              protected override async Task OnInitializedAsync()
+              {
+                  await LoadAsync();
+              }
+
+              private async Task LoadAsync()
+              {
+                  _summary = await CrmApi.GetDashboardAsync();
+              }
+          }
+          EOF
+
+      - name: Add customer loyalty tools page
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Components/Pages/CustomerLoyaltyTools.razor <<'EOF'
+          @page "/customers/loyalty-tools"
+          @attribute [Authorize(Roles = "Administrator,Manager,Cashier")]
+          @inject ICrmApiClient CrmApi
+
+          <PageTitle>Loyalty Tools - OUTFITTERS</PageTitle>
+
+          <div class="page-heading">
+              <div>
+                  <span class="eyebrow">Customer service</span>
+                  <h1>Loyalty Tools</h1>
+                  <p>Adjust points, issue store credit, and create customer vouchers.</p>
+              </div>
+          </div>
+
+          <div class="crm-tools-grid">
+              <section class="page-card crm-tool-card">
+                  <h2>Adjust Loyalty Points</h2>
+
+                  <label>
+                      Customer ID
+                      <input @bind="_loyaltyCustomerIdText" />
+                  </label>
+
+                  <label>
+                      Points Change
+                      <input type="number" step="1" @bind="_pointsChange" />
+                  </label>
+
+                  <label>
+                      Notes
+                      <textarea rows="3" @bind="_loyaltyNotes"></textarea>
+                  </label>
+
+                  <button
+                      type="button"
+                      class="primary-button"
+                      @onclick="AdjustLoyaltyAsync">
+                      Save Loyalty Adjustment
+                  </button>
+              </section>
+
+              <section class="page-card crm-tool-card">
+                  <h2>Adjust Store Credit</h2>
+
+                  <label>
+                      Customer ID
+                      <input @bind="_creditCustomerIdText" />
+                  </label>
+
+                  <label>
+                      Amount Change
+                      <input type="number" step="0.01" @bind="_creditChange" />
+                  </label>
+
+                  <label>
+                      Notes
+                      <textarea rows="3" @bind="_creditNotes"></textarea>
+                  </label>
+
+                  <button
+                      type="button"
+                      class="primary-button"
+                      @onclick="AdjustCreditAsync">
+                      Save Store Credit Adjustment
+                  </button>
+              </section>
+
+              <section class="page-card crm-tool-card">
+                  <h2>Create Voucher</h2>
+
+                  <label>
+                      Customer ID
+                      <input @bind="_voucherCustomerIdText" />
+                  </label>
+
+                  <label>
+                      Discount Amount
+                      <input type="number" step="0.01" @bind="_voucherAmount" />
+                  </label>
+
+                  <label>
+                      Discount Percent
+                      <input type="number" step="0.01" @bind="_voucherPercent" />
+                  </label>
+
+                  <label>
+                      Minimum Spend
+                      <input type="number" step="0.01" @bind="_minimumSpend" />
+                  </label>
+
+                  <label>
+                      Valid Until
+                      <InputDate @bind-Value="_validUntil" />
+                  </label>
+
+                  <button
+                      type="button"
+                      class="primary-button"
+                      @onclick="CreateVoucherAsync">
+                      Create Voucher
+                  </button>
+              </section>
+          </div>
+
+          @if (!string.IsNullOrWhiteSpace(_message))
+          {
+              <div class="@(_success ? "success-message" : "error-message")">
+                  @_message
+              </div>
+          }
+
+          @code {
+              private string _loyaltyCustomerIdText = string.Empty;
+              private decimal _pointsChange;
+              private string _loyaltyNotes = string.Empty;
+
+              private string _creditCustomerIdText = string.Empty;
+              private decimal _creditChange;
+              private string _creditNotes = string.Empty;
+
+              private string _voucherCustomerIdText = string.Empty;
+              private decimal _voucherAmount;
+              private decimal _voucherPercent;
+              private decimal _minimumSpend;
+              private DateTime _validUntil = DateTime.Today.AddDays(30);
+
+              private string? _message;
+              private bool _success;
+
+              private async Task AdjustLoyaltyAsync()
+              {
+                  if (!Guid.TryParse(
+                      _loyaltyCustomerIdText,
+                      out var customerId))
+                  {
+                      SetMessage(false, "Enter a valid customer ID.");
+                      return;
+                  }
+
+                  var success = await CrmApi.AdjustLoyaltyAsync(
+                      new LoyaltyAdjustmentRequest
+                      {
+                          CustomerId = customerId,
+                          PointsChange = _pointsChange,
+                          Notes = _loyaltyNotes
+                      });
+
+                  SetMessage(
+                      success,
+                      success
+                          ? "Loyalty points updated."
+                          : "The loyalty adjustment failed.");
+              }
+
+              private async Task AdjustCreditAsync()
+              {
+                  if (!Guid.TryParse(
+                      _creditCustomerIdText,
+                      out var customerId))
+                  {
+                      SetMessage(false, "Enter a valid customer ID.");
+                      return;
+                  }
+
+                  var success = await CrmApi.AdjustStoreCreditAsync(
+                      new StoreCreditAdjustmentRequest
+                      {
+                          CustomerId = customerId,
+                          AmountChange = _creditChange,
+                          Notes = _creditNotes
+                      });
+
+                  SetMessage(
+                      success,
+                      success
+                          ? "Store credit updated."
+                          : "The store-credit adjustment failed.");
+              }
+
+              private async Task CreateVoucherAsync()
+              {
+                  if (!Guid.TryParse(
+                      _voucherCustomerIdText,
+                      out var customerId))
+                  {
+                      SetMessage(false, "Enter a valid customer ID.");
+                      return;
+                  }
+
+                  var success = await CrmApi.CreateVoucherAsync(
+                      new CustomerVoucherRequest
+                      {
+                          CustomerId = customerId,
+                          DiscountAmount = _voucherAmount,
+                          DiscountPercent = _voucherPercent,
+                          MinimumSpend = _minimumSpend,
+                          ValidUntilUtc = _validUntil.ToUniversalTime()
+                      });
+
+                  SetMessage(
+                      success,
+                      success
+                          ? "Customer voucher created."
+                          : "The voucher could not be created.");
+              }
+
+              private void SetMessage(bool success, string message)
+              {
+                  _success = success;
+                  _message = message;
+              }
+          }
+          EOF
+
+      - name: Update navigation and CRM styles
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/Outfitters.Web/Components/Layout/MainLayout.razor")
+          text = path.read_text()
+
+          marker = '<NavLink href="/customers">Customers</NavLink>'
+
+          additions = (
+              marker
+              + '\n                      <NavLink href="/customers/crm">'
+              + 'Customer CRM</NavLink>'
+              + '\n                      <NavLink href="/customers/loyalty-tools">'
+              + 'Loyalty Tools</NavLink>'
+          )
+
+          if 'href="/customers/crm"' not in text:
+              text = text.replace(marker, additions, 1)
+
+          path.write_text(text)
+          PY
+
+          cat >> src/Outfitters.Web/wwwroot/css/site.css <<'EOF'
+
+          .crm-section {
+              margin-bottom: 18px;
+              padding: 0;
+              overflow: hidden;
+          }
+
+          .crm-section .section-heading {
+              padding: 18px;
+          }
+
+          .crm-customer-table {
+              grid-template-columns:
+                  minmax(180px, 1.5fr)
+                  90px
+                  120px
+                  90px
+                  90px
+                  110px;
+          }
+
+          .crm-segment-table {
+              grid-template-columns:
+                  minmax(180px, 1.4fr)
+                  100px
+                  120px
+                  120px;
+          }
+
+          .crm-tools-grid {
+              display: grid;
+              grid-template-columns: repeat(3, minmax(0, 1fr));
+              gap: 18px;
+              margin-bottom: 18px;
+          }
+
+          .crm-tool-card {
+              display: grid;
+              gap: 14px;
+          }
+
+          .crm-tool-card h2 {
+              margin: 0 0 4px;
+          }
+
+          .crm-tool-card label {
+              display: grid;
+              gap: 8px;
+              color: #c6c8ce;
+          }
+
+          .crm-tool-card input,
+          .crm-tool-card textarea {
+              width: 100%;
+              padding: 12px 14px;
+              border: 1px solid #343740;
+              border-radius: 10px;
+              color: #fff;
+              background: #111317;
+          }
+
+          @media (max-width: 1050px) {
+              .crm-tools-grid {
+                  grid-template-columns: 1fr;
+              }
+
+              .crm-customer-table,
+              .crm-segment-table {
+                  grid-template-columns: 1fr;
+              }
+
+              .crm-customer-table.table-header,
+              .crm-segment-table.table-header {
+                  display: none;
+              }
+          }
+          EOF
+
+      - name: Normalize Razor directives
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("src/Outfitters.Web")
+          pattern = re.compile(
+              r"^\s*@(page|attribute|inject|using|namespace|inherits|layout|"
+              r"implements|typeparam|rendermode)\b"
+          )
+
+          for path in root.rglob("*.razor"):
+              lines = path.read_text(encoding="utf-8-sig").splitlines()
+              normalized = [
+                  line.lstrip() if pattern.match(line) else line
+                  for line in lines
+              ]
+
+              path.write_text(
+                  "\n".join(normalized).rstrip() + "\n",
+                  encoding="utf-8"
+              )
+          PY
+
+      - name: Restore build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          dotnet restore OutfittersRetailManagementSystem.sln
+          dotnet build OutfittersRetailManagementSystem.sln \
+            --configuration Release \
+            --no-restore
+          dotnet test OutfittersRetailManagementSystem.sln \
+            --configuration Release \
+            --no-build
+
+      - name: Commit milestone 18
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add src/Outfitters.Web
+
+          if git diff --cached --quiet
+          then
+            echo "Milestone 18 is already committed."
+            exit 0
+          fi
+
+          git commit -m "Milestone 18 - Add customer loyalty and CRM UI"
+
+          for attempt in 1 2 3
+          do
+            git fetch origin main
+            git rebase origin/main
+
+            if git push origin HEAD:main
+            then
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]
+            then
+              sleep 5
+            fi
+          done
+
+          echo "Unable to push Milestone 18 after three attempts."
+          exit 1
