@@ -1,0 +1,96 @@
+@page "/hr/attendance"
+@attribute [Authorize]
+@inject IHrApiClient HrApi
+
+<PageTitle>Attendance Clock - OUTFITTERS</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">Attendance</span>
+        <h1>Clock In and Out</h1>
+        <p>Record employee attendance using a secure employee PIN.</p>
+    </div>
+</div>
+
+<section class="page-card hr-form">
+    <div class="form-grid">
+        <label>
+            Employee ID
+            <input @bind="_employeeIdText" />
+        </label>
+
+        <label>
+            Store ID
+            <input @bind="_storeIdText" />
+        </label>
+    </div>
+
+    <label>
+        Employee PIN
+        <input type="password" @bind="_pin" />
+    </label>
+
+    <label>
+        Entry Type
+        <select @bind="_entryType">
+            <option value="ClockIn">Clock In</option>
+            <option value="ClockOut">Clock Out</option>
+            <option value="BreakStart">Start Break</option>
+            <option value="BreakEnd">End Break</option>
+        </select>
+    </label>
+
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="@(_success ? "success-message" : "error-message")">
+            @_message
+        </div>
+    }
+
+    <button
+        type="button"
+        class="primary-button"
+        disabled="@_submitting"
+        @onclick="SubmitAsync">
+        @(_submitting ? "Saving..." : "Record Attendance")
+    </button>
+</section>
+
+@code {
+    private string _employeeIdText = string.Empty;
+    private string _storeIdText = string.Empty;
+    private string _pin = string.Empty;
+    private string _entryType = "ClockIn";
+    private string? _message;
+    private bool _success;
+    private bool _submitting;
+
+    private async Task SubmitAsync()
+    {
+        _message = null;
+        _success = false;
+
+        if (!Guid.TryParse(_employeeIdText, out var employeeId) ||
+            !Guid.TryParse(_storeIdText, out var storeId))
+        {
+            _message = "Enter valid employee and store IDs.";
+            return;
+        }
+
+        _submitting = true;
+
+        _success = await HrApi.PostClockEntryAsync(
+            new ClockEntryRequest
+            {
+                EmployeeId = employeeId,
+                StoreId = storeId,
+                Pin = _pin,
+                EntryType = _entryType
+            });
+
+        _submitting = false;
+        _message = _success
+            ? "Attendance entry recorded."
+            : "The attendance entry could not be recorded.";
+    }
+}
