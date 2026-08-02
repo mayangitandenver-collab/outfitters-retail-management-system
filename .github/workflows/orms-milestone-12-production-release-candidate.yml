@@ -1,0 +1,354 @@
+name: ORMS Milestone 12 - Production Release Candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  milestone12:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Write production readiness files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p deployment
+          mkdir -p src/Outfitters.API/Controllers
+
+          cat > src/Outfitters.API/Controllers/ReleaseReadinessController.cs <<'EOF'
+          using Microsoft.AspNetCore.Authorization;
+          using Microsoft.AspNetCore.Mvc;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.API.Controllers;
+
+          [ApiController]
+          [AllowAnonymous]
+          [Route("api/system")]
+          public sealed class ReleaseReadinessController : ControllerBase
+          {
+              private readonly ApplicationDbContext _db;
+              private readonly IWebHostEnvironment _environment;
+
+              public ReleaseReadinessController(
+                  ApplicationDbContext db,
+                  IWebHostEnvironment environment)
+              {
+                  _db = db;
+                  _environment = environment;
+              }
+
+              [HttpGet("health/live")]
+              public IActionResult Liveness()
+              {
+                  return Ok(new
+                  {
+                      Status = "Healthy",
+                      Service = "Outfitters Retail Management System",
+                      Environment = _environment.EnvironmentName,
+                      UtcTime = DateTime.UtcNow
+                  });
+              }
+
+              [HttpGet("health/ready")]
+              public async Task<IActionResult> Readiness(
+                  CancellationToken cancellationToken)
+              {
+                  try
+                  {
+                      var databaseReady = await _db.Database
+                          .CanConnectAsync(cancellationToken);
+
+                      if (!databaseReady)
+                      {
+                          return StatusCode(
+                              StatusCodes.Status503ServiceUnavailable,
+                              new
+                              {
+                                  Status = "Unhealthy",
+                                  Database = "Unavailable",
+                                  UtcTime = DateTime.UtcNow
+                              });
+                      }
+
+                      return Ok(new
+                      {
+                          Status = "Ready",
+                          Database = "Connected",
+                          UtcTime = DateTime.UtcNow
+                      });
+                  }
+                  catch (Exception exception)
+                  {
+                      return StatusCode(
+                          StatusCodes.Status503ServiceUnavailable,
+                          new
+                          {
+                              Status = "Unhealthy",
+                              Database = "Error",
+                              Error = exception.Message,
+                              UtcTime = DateTime.UtcNow
+                          });
+                  }
+              }
+          }
+          EOF
+
+          cat > Dockerfile <<'EOF'
+          FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS runtime
+          WORKDIR /app
+          EXPOSE 8080
+          ENV ASPNETCORE_URLS=http://+:8080
+          ENV ASPNETCORE_ENVIRONMENT=Production
+
+          FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+          WORKDIR /src
+          COPY . .
+          RUN dotnet restore OutfittersRetailManagementSystem.sln
+          RUN dotnet publish src/Outfitters.API/Outfitters.API.csproj \
+              --configuration Release \
+              --output /app/publish \
+              --no-restore
+
+          FROM runtime AS final
+          WORKDIR /app
+          COPY --from=build /app/publish .
+          ENTRYPOINT ["dotnet", "Outfitters.API.dll"]
+          EOF
+
+          cat > .dockerignore <<'EOF'
+          **/bin/
+          **/obj/
+          .git/
+          .github/
+          .idea/
+          .vscode/
+          *.user
+          *.suo
+          *.db
+          *.log
+          artifacts/
+          EOF
+
+          cat > docker-compose.production.yml <<'EOF'
+          services:
+            database:
+              image: postgres:17-alpine
+              restart: unless-stopped
+              environment:
+                POSTGRES_DB: outfitters
+                POSTGRES_USER: outfitters
+                POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+              volumes:
+                - outfitters_postgres_data:/var/lib/postgresql/data
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U outfitters -d outfitters"]
+                interval: 10s
+                timeout: 5s
+                retries: 10
+
+            api:
+              build:
+                context: .
+                dockerfile: Dockerfile
+              restart: unless-stopped
+              depends_on:
+                database:
+                  condition: service_healthy
+              environment:
+                ASPNETCORE_ENVIRONMENT: Production
+                ASPNETCORE_URLS: http://+:8080
+                ConnectionStrings__DefaultConnection: Host=database;Port=5432;Database=outfitters;Username=outfitters;Password=${POSTGRES_PASSWORD}
+                Jwt__Key: ${JWT_KEY}
+                Jwt__Issuer: ${JWT_ISSUER:-Outfitters}
+                Jwt__Audience: ${JWT_AUDIENCE:-OutfittersClients}
+              ports:
+                - "${ORMS_PORT:-8080}:8080"
+
+          volumes:
+            outfitters_postgres_data:
+          EOF
+
+          cat > .env.production.example <<'EOF'
+          POSTGRES_PASSWORD=replace-with-a-strong-database-password
+          JWT_KEY=replace-with-a-random-secret-at-least-32-characters-long
+          JWT_ISSUER=Outfitters
+          JWT_AUDIENCE=OutfittersClients
+          ORMS_PORT=8080
+          EOF
+
+          cat > deployment/PRODUCTION-DEPLOYMENT.md <<'EOF'
+          # ORMS Production Deployment
+
+          ## Prerequisites
+
+          - Windows 10/11 or Windows Server with Docker Desktop or Docker Engine
+          - A fixed local-network IP address for the ORMS host
+          - Xprinter installed on the cashier workstation or print-service host
+          - Regular PostgreSQL backup storage
+
+          ## Initial deployment
+
+          1. Copy `.env.production.example` to `.env`.
+          2. Replace every placeholder secret.
+          3. Run `docker compose -f docker-compose.production.yml up -d --build`.
+          4. Confirm `/api/system/health/live` returns `Healthy`.
+          5. Confirm `/api/system/health/ready` returns `Ready`.
+          6. Restrict the ORMS port to the trusted local network.
+          7. Create the first administrator through the approved bootstrap process.
+          8. Configure store records, printers, tax settings, and user roles.
+
+          ## Database backup
+
+          Example manual backup:
+
+          ```bash
+          docker compose -f docker-compose.production.yml exec -T database \
+            pg_dump -U outfitters -d outfitters -Fc > outfitters-backup.dump
+          ```
+
+          Test restoration regularly on a separate database.
+
+          ## Upgrade procedure
+
+          1. Create and verify a database backup.
+          2. Pull the approved release commit.
+          3. Run the automated build and tests.
+          4. Rebuild containers.
+          5. Apply EF Core migrations using the approved deployment account.
+          6. Verify health endpoints, login, POS checkout, inventory, and printing.
+          7. Keep the prior image available for rollback.
+
+          ## Minimum production checklist
+
+          - Replace all example passwords and JWT secrets.
+          - Enable HTTPS through a reverse proxy when traffic leaves the trusted LAN.
+          - Limit database access to the application host.
+          - Use named employee accounts instead of shared logins.
+          - Review audit logs routinely.
+          - Configure daily database backups and off-device retention.
+          - Test Xprinter output before opening the store.
+          EOF
+
+          cat > RELEASE_NOTES_RC1.md <<'EOF'
+          # Outfitters Retail Management System — Release Candidate 1
+
+          ORMS RC1 consolidates the completed backend milestones:
+
+          - Multi-store foundation
+          - Authentication and role-based access control
+          - Catalog, variants, inventory, and transfers
+          - POS sales, returns, and cash sessions
+          - Purchasing and suppliers
+          - Reporting and analytics
+          - Customer loyalty and CRM
+          - Employee management, attendance, and audit logs
+          - Finance and accounting foundation
+          - Barcode aliases, notification queues, integrations, and ESC/POS receipts
+          - Production health endpoints and container deployment files
+
+          RC1 must complete user-acceptance testing before use with live financial data.
+          EOF
+
+      - name: Restore build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore OutfittersRetailManagementSystem.sln
+          dotnet build OutfittersRetailManagementSystem.sln \
+            --configuration Release \
+            --no-restore
+          dotnet test OutfittersRetailManagementSystem.sln \
+            --configuration Release \
+            --no-build
+
+      - name: Publish release candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf artifacts
+          mkdir -p artifacts/publish
+
+          dotnet publish src/Outfitters.API/Outfitters.API.csproj \
+            --configuration Release \
+            --output artifacts/publish \
+            --no-build
+
+          cp RELEASE_NOTES_RC1.md artifacts/
+          cp deployment/PRODUCTION-DEPLOYMENT.md artifacts/
+          cp docker-compose.production.yml artifacts/
+          cp .env.production.example artifacts/
+
+          (
+            cd artifacts
+            zip -r outfitters-orms-rc1.zip \
+              publish \
+              RELEASE_NOTES_RC1.md \
+              PRODUCTION-DEPLOYMENT.md \
+              docker-compose.production.yml \
+              .env.production.example
+          )
+
+      - name: Upload release candidate artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: outfitters-orms-rc1
+          path: artifacts/outfitters-orms-rc1.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Commit milestone 12
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            src \
+            Dockerfile \
+            .dockerignore \
+            docker-compose.production.yml \
+            .env.production.example \
+            deployment \
+            RELEASE_NOTES_RC1.md
+
+          if git diff --cached --quiet
+          then
+            echo "Milestone 12 files are already committed; nothing to push."
+            exit 0
+          fi
+
+          git commit -m "Milestone 12 - Add production release candidate"
+
+          for attempt in 1 2 3
+          do
+            git fetch origin main
+            git rebase origin/main
+
+            if git push origin HEAD:main
+            then
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]
+            then
+              sleep 5
+            fi
+          done
+
+          echo "Unable to push Milestone 12 after three attempts."
+          exit 1
