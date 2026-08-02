@@ -1,0 +1,117 @@
+@page "/purchasing/receiving"
+@attribute [Authorize(Roles = "Administrator,Manager,PurchasingOfficer,InventoryStaff")]
+@inject IPurchasingApiClient PurchasingApi
+
+<PageTitle>Goods Receiving - OUTFITTERS</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">Warehouse receiving</span>
+        <h1>Goods Receiving</h1>
+        <p>Receive purchase orders and record delivered or damaged quantities.</p>
+    </div>
+</div>
+
+<section class="page-card purchasing-form">
+    <div class="form-grid">
+        <label>
+            Purchase Order ID
+            <input @bind="_purchaseOrderIdText" />
+        </label>
+
+        <label>
+            Delivery Receipt Number
+            <input @bind="_deliveryReceiptNumber" />
+        </label>
+    </div>
+
+    <div class="form-grid">
+        <label>
+            Product Variant ID
+            <input @bind="_productVariantIdText" />
+        </label>
+
+        <label>
+            Quantity Received
+            <input type="number" min="0" step="1" @bind="_quantityReceived" />
+        </label>
+    </div>
+
+    <label>
+        Quantity Damaged
+        <input type="number" min="0" step="1" @bind="_quantityDamaged" />
+    </label>
+
+    <label>
+        Notes
+        <textarea rows="4" @bind="_notes"></textarea>
+    </label>
+
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="@(_success ? "success-message" : "error-message")">
+            @_message
+        </div>
+    }
+
+    <button
+        type="button"
+        class="primary-button"
+        disabled="@_submitting"
+        @onclick="SubmitAsync">
+        @(_submitting ? "Receiving..." : "Post Goods Receipt")
+    </button>
+</section>
+
+@code {
+    private string _purchaseOrderIdText = string.Empty;
+    private string _deliveryReceiptNumber = string.Empty;
+    private string _productVariantIdText = string.Empty;
+    private decimal _quantityReceived;
+    private decimal _quantityDamaged;
+    private string _notes = string.Empty;
+    private string? _message;
+    private bool _success;
+    private bool _submitting;
+
+    private async Task SubmitAsync()
+    {
+        _message = null;
+        _success = false;
+
+        if (!Guid.TryParse(
+            _purchaseOrderIdText,
+            out var purchaseOrderId) ||
+            !Guid.TryParse(
+                _productVariantIdText,
+                out var productVariantId))
+        {
+            _message = "Enter valid purchase order and product variant IDs.";
+            return;
+        }
+
+        _submitting = true;
+
+        _success = await PurchasingApi.ReceivePurchaseOrderAsync(
+            new GoodsReceiptRequest
+            {
+                PurchaseOrderId = purchaseOrderId,
+                DeliveryReceiptNumber = _deliveryReceiptNumber,
+                Notes = _notes,
+                Lines = new[]
+                {
+                    new GoodsReceiptLineRequest
+                    {
+                        ProductVariantId = productVariantId,
+                        QuantityReceived = _quantityReceived,
+                        QuantityDamaged = _quantityDamaged
+                    }
+                }
+            });
+
+        _submitting = false;
+        _message = _success
+            ? "Goods receipt posted successfully."
+            : "The goods receipt could not be posted.";
+    }
+}

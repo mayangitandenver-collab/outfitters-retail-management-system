@@ -1,0 +1,146 @@
+@page "/purchasing"
+@attribute [Authorize(Roles = "Administrator,Manager,PurchasingOfficer,Accountant")]
+@inject IPurchasingApiClient PurchasingApi
+
+<PageTitle>Purchasing Dashboard - OUTFITTERS</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">Procurement control</span>
+        <h1>Purchasing and Suppliers</h1>
+        <p>Track purchase orders, deliveries, approvals, and supplier performance.</p>
+    </div>
+
+    <button
+        type="button"
+        class="primary-button compact"
+        @onclick="LoadAsync">
+        Refresh
+    </button>
+</div>
+
+<div class="metric-grid">
+    <article class="metric-card">
+        <span>Active Suppliers</span>
+        <strong>@_summary.ActiveSupplierCount</strong>
+    </article>
+
+    <article class="metric-card">
+        <span>Draft Purchase Orders</span>
+        <strong>@_summary.DraftPurchaseOrderCount</strong>
+    </article>
+
+    <article class="metric-card alert-card">
+        <span>Awaiting Approval</span>
+        <strong>@_summary.AwaitingApprovalCount</strong>
+    </article>
+
+    <article class="metric-card alert-card">
+        <span>Overdue Deliveries</span>
+        <strong>@_summary.OverdueDeliveryCount</strong>
+    </article>
+
+    <article class="metric-card">
+        <span>Open PO Value</span>
+        <strong>@_summary.OpenPurchaseOrderValue.ToString("C")</strong>
+    </article>
+
+    <article class="metric-card">
+        <span>Received This Month</span>
+        <strong>@_summary.ReceivedThisMonthValue.ToString("C")</strong>
+    </article>
+</div>
+
+<section class="page-card purchasing-section">
+    <div class="section-heading">
+        <h2>Purchase Orders</h2>
+    </div>
+
+    <div class="data-table">
+        <div class="table-row table-header purchase-order-table">
+            <span>PO Number</span>
+            <span>Supplier</span>
+            <span>Store</span>
+            <span>Status</span>
+            <span>Expected Delivery</span>
+            <span>Total</span>
+            <span>Received</span>
+        </div>
+
+        @foreach (var item in _summary.PurchaseOrders)
+        {
+            <div class="table-row purchase-order-table">
+                <strong>@item.PurchaseOrderNumber</strong>
+                <span>@item.SupplierName</span>
+                <span>@item.StoreName</span>
+                <StatusBadge
+                    Text="@item.Status"
+                    Positive="@(item.Status is "Completed" or "Received")" />
+                <span>@FormatDate(item.ExpectedDeliveryDateUtc)</span>
+                <span>@item.TotalAmount.ToString("C")</span>
+                <span>@item.ReceivedAmount.ToString("C")</span>
+            </div>
+        }
+
+        @if (_summary.PurchaseOrders.Count == 0)
+        {
+            <div class="empty-state">No purchase orders are available.</div>
+        }
+    </div>
+</section>
+
+<section class="page-card purchasing-section">
+    <div class="section-heading">
+        <h2>Supplier Performance</h2>
+    </div>
+
+    <div class="data-table">
+        <div class="table-row table-header supplier-table">
+            <span>Supplier</span>
+            <span>On-Time Delivery</span>
+            <span>Order Accuracy</span>
+            <span>Return Rate</span>
+            <span>Avg. Lead Time</span>
+            <span>Total Purchases</span>
+        </div>
+
+        @foreach (var item in _summary.Suppliers)
+        {
+            <div class="table-row supplier-table">
+                <span>
+                    <strong>@item.SupplierName</strong>
+                    <small>@item.SupplierCode</small>
+                </span>
+                <span>@item.OnTimeDeliveryRate.ToString("0.##")%</span>
+                <span>@item.OrderAccuracyRate.ToString("0.##")%</span>
+                <span>@item.ReturnRate.ToString("0.##")%</span>
+                <span>@item.AverageLeadTimeDays.ToString("0.##") days</span>
+                <span>@item.TotalPurchaseValue.ToString("C")</span>
+            </div>
+        }
+
+        @if (_summary.Suppliers.Count == 0)
+        {
+            <div class="empty-state">No supplier performance data is available.</div>
+        }
+    </div>
+</section>
+
+@code {
+    private PurchasingDashboardSummary _summary = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _summary = await PurchasingApi.GetDashboardAsync();
+    }
+
+    private static string FormatDate(DateTime? value) =>
+        value.HasValue
+            ? value.Value.ToLocalTime().ToString("MMM d, yyyy")
+            : "—";
+}

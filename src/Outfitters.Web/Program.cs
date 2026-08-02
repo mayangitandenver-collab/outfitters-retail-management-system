@@ -49,6 +49,14 @@ builder.Services
     })
     .AddHttpMessageHandler<BearerTokenHandler>();
 
+builder.Services
+    .AddHttpClient<IPurchasingApiClient, PurchasingApiClient>(client =>
+    {
+        client.BaseAddress = new Uri(apiBaseUrl);
+        client.Timeout = TimeSpan.FromSeconds(30);
+    })
+    .AddHttpMessageHandler<BearerTokenHandler>();
+
 var app = builder.Build();
 
 if (!app.Environment.IsDevelopment())
