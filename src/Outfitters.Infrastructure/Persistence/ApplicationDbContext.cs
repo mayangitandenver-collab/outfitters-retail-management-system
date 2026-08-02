@@ -44,6 +44,11 @@ public sealed class ApplicationDbContext
     public DbSet<CustomerVoucher> CustomerVouchers => Set<CustomerVoucher>();
     public DbSet<CustomerFavoriteProduct> CustomerFavoriteProducts => Set<CustomerFavoriteProduct>();
 
+              public DbSet<EmployeeProfile> EmployeeProfiles => Set<EmployeeProfile>();
+    public DbSet<EmployeeStoreAssignment> EmployeeStoreAssignments => Set<EmployeeStoreAssignment>();
+    public DbSet<EmployeeAttendance> EmployeeAttendanceRecords => Set<EmployeeAttendance>();
+    public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+
 protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
@@ -412,6 +417,47 @@ protected override void OnModelCreating(ModelBuilder builder)
         {
             entity.HasOne(x => x.Customer).WithMany()
                 .HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        builder.Entity<EmployeeProfile>(entity =>
+        {
+            entity.HasIndex(x => x.EmployeeNumber).IsUnique();
+            entity.HasIndex(x => x.UserId).IsUnique();
+            entity.Property(x => x.EmployeeNumber).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.JobTitle).HasMaxLength(150).IsRequired();
+            entity.HasOne(x => x.User).WithMany()
+                .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.PrimaryStore).WithMany()
+                .HasForeignKey(x => x.PrimaryStoreId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        builder.Entity<EmployeeStoreAssignment>(entity =>
+        {
+            entity.HasIndex(x => new { x.EmployeeProfileId, x.StoreId, x.UnassignedAtUtc });
+            entity.HasOne(x => x.EmployeeProfile).WithMany(x => x.StoreAssignments)
+                .HasForeignKey(x => x.EmployeeProfileId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.Store).WithMany()
+                .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<EmployeeAttendance>(entity =>
+        {
+            entity.HasIndex(x => new { x.EmployeeProfileId, x.WorkDate }).IsUnique();
+            entity.HasOne(x => x.EmployeeProfile).WithMany(x => x.AttendanceRecords)
+                .HasForeignKey(x => x.EmployeeProfileId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<AuditLog>(entity =>
+        {
+            entity.HasIndex(x => x.CreatedAtUtc);
+            entity.HasIndex(x => new { x.EntityName, x.EntityId });
+            entity.Property(x => x.Action).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.EntityName).HasMaxLength(150).IsRequired();
+            entity.Property(x => x.EntityId).HasMaxLength(100);
+            entity.Property(x => x.IpAddress).HasMaxLength(100);
+            entity.Property(x => x.UserAgent).HasMaxLength(1000);
+            entity.HasOne(x => x.User).WithMany()
+                .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.SetNull);
         });
 }
 }
