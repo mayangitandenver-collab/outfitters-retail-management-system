@@ -1,0 +1,489 @@
+name: ORMS Milestone 9 - Employee Management and RBAC
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  milestone9:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Write employee domain model
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src/Outfitters.Domain/Entities src/Outfitters.Domain/Enums
+          mkdir -p src/Outfitters.Application/Employees src/Outfitters.API/Controllers
+
+          cat > src/Outfitters.Domain/Enums/EmployeeStatus.cs <<'EOF'
+          namespace Outfitters.Domain.Enums;
+          public enum EmployeeStatus { Active = 1, Suspended = 2, Inactive = 3, Terminated = 4 }
+          EOF
+
+          cat > src/Outfitters.Domain/Enums/AttendanceStatus.cs <<'EOF'
+          namespace Outfitters.Domain.Enums;
+          public enum AttendanceStatus { Present = 1, Late = 2, Absent = 3, OnLeave = 4, HalfDay = 5 }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/EmployeeProfile.cs <<'EOF'
+          using Outfitters.Domain.Common;
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class EmployeeProfile : BaseEntity
+          {
+              public string EmployeeNumber { get; set; } = string.Empty;
+              public Guid UserId { get; set; }
+              public ApplicationUser User { get; set; } = null!;
+              public Guid? PrimaryStoreId { get; set; }
+              public Store? PrimaryStore { get; set; }
+              public string JobTitle { get; set; } = string.Empty;
+              public DateOnly HireDate { get; set; }
+              public DateOnly? TerminationDate { get; set; }
+              public EmployeeStatus Status { get; set; } = EmployeeStatus.Active;
+              public string? EmergencyContactName { get; set; }
+              public string? EmergencyContactPhone { get; set; }
+              public ICollection<EmployeeStoreAssignment> StoreAssignments { get; set; } = new List<EmployeeStoreAssignment>();
+              public ICollection<EmployeeAttendance> AttendanceRecords { get; set; } = new List<EmployeeAttendance>();
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/EmployeeStoreAssignment.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class EmployeeStoreAssignment : BaseEntity
+          {
+              public Guid EmployeeProfileId { get; set; }
+              public EmployeeProfile EmployeeProfile { get; set; } = null!;
+              public Guid StoreId { get; set; }
+              public Store Store { get; set; } = null!;
+              public bool IsPrimary { get; set; }
+              public DateTime AssignedAtUtc { get; set; } = DateTime.UtcNow;
+              public DateTime? UnassignedAtUtc { get; set; }
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/EmployeeAttendance.cs <<'EOF'
+          using Outfitters.Domain.Common;
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class EmployeeAttendance : BaseEntity
+          {
+              public Guid EmployeeProfileId { get; set; }
+              public EmployeeProfile EmployeeProfile { get; set; } = null!;
+              public DateOnly WorkDate { get; set; }
+              public DateTime? ClockInAtUtc { get; set; }
+              public DateTime? ClockOutAtUtc { get; set; }
+              public AttendanceStatus Status { get; set; } = AttendanceStatus.Present;
+              public string? Notes { get; set; }
+          }
+          EOF
+
+          cat > src/Outfitters.Domain/Entities/AuditLog.cs <<'EOF'
+          using Outfitters.Domain.Common;
+
+          namespace Outfitters.Domain.Entities;
+
+          public sealed class AuditLog : BaseEntity
+          {
+              public Guid? UserId { get; set; }
+              public ApplicationUser? User { get; set; }
+              public string Action { get; set; } = string.Empty;
+              public string EntityName { get; set; } = string.Empty;
+              public string? EntityId { get; set; }
+              public string? DetailsJson { get; set; }
+              public string? IpAddress { get; set; }
+              public string? UserAgent { get; set; }
+          }
+          EOF
+
+      - name: Write employee contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > src/Outfitters.Application/Employees/EmployeeContracts.cs <<'EOF'
+          using Outfitters.Domain.Enums;
+
+          namespace Outfitters.Application.Employees;
+
+          public sealed record CreateEmployeeRequest(
+              string Email, string FirstName, string LastName,
+              string TemporaryPassword, string JobTitle, DateOnly HireDate,
+              Guid? PrimaryStoreId, IReadOnlyCollection<string> Roles,
+              string? EmergencyContactName, string? EmergencyContactPhone);
+
+          public sealed record UpdateEmployeeRequest(
+              string FirstName, string LastName, string JobTitle,
+              Guid? PrimaryStoreId, EmployeeStatus Status,
+              string? EmergencyContactName, string? EmergencyContactPhone);
+
+          public sealed record AssignRolesRequest(IReadOnlyCollection<string> Roles);
+          public sealed record AssignStoreRequest(Guid StoreId, bool IsPrimary);
+          public sealed record ResetEmployeePasswordRequest(string NewPassword);
+          public sealed record RecordAttendanceRequest(
+              DateOnly WorkDate, DateTime? ClockInAtUtc, DateTime? ClockOutAtUtc,
+              AttendanceStatus Status, string? Notes);
+          EOF
+
+      - name: Extend database context
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('src/Outfitters.Infrastructure/Persistence/ApplicationDbContext.cs')
+          text = path.read_text()
+
+          dbsets = '''              public DbSet<EmployeeProfile> EmployeeProfiles => Set<EmployeeProfile>();
+              public DbSet<EmployeeStoreAssignment> EmployeeStoreAssignments => Set<EmployeeStoreAssignment>();
+              public DbSet<EmployeeAttendance> EmployeeAttendanceRecords => Set<EmployeeAttendance>();
+              public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+
+'''
+          if 'DbSet<EmployeeProfile>' not in text:
+              pos = text.find('protected override void OnModelCreating')
+              if pos < 0:
+                  raise SystemExit('OnModelCreating not found')
+              text = text[:pos] + dbsets + text[pos:]
+
+          config = '''
+                  builder.Entity<EmployeeProfile>(entity =>
+                  {
+                      entity.HasIndex(x => x.EmployeeNumber).IsUnique();
+                      entity.HasIndex(x => x.UserId).IsUnique();
+                      entity.Property(x => x.EmployeeNumber).HasMaxLength(50).IsRequired();
+                      entity.Property(x => x.JobTitle).HasMaxLength(150).IsRequired();
+                      entity.HasOne(x => x.User).WithMany()
+                          .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+                      entity.HasOne(x => x.PrimaryStore).WithMany()
+                          .HasForeignKey(x => x.PrimaryStoreId).OnDelete(DeleteBehavior.SetNull);
+                  });
+
+                  builder.Entity<EmployeeStoreAssignment>(entity =>
+                  {
+                      entity.HasIndex(x => new { x.EmployeeProfileId, x.StoreId, x.UnassignedAtUtc });
+                      entity.HasOne(x => x.EmployeeProfile).WithMany(x => x.StoreAssignments)
+                          .HasForeignKey(x => x.EmployeeProfileId).OnDelete(DeleteBehavior.Cascade);
+                      entity.HasOne(x => x.Store).WithMany()
+                          .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.Restrict);
+                  });
+
+                  builder.Entity<EmployeeAttendance>(entity =>
+                  {
+                      entity.HasIndex(x => new { x.EmployeeProfileId, x.WorkDate }).IsUnique();
+                      entity.HasOne(x => x.EmployeeProfile).WithMany(x => x.AttendanceRecords)
+                          .HasForeignKey(x => x.EmployeeProfileId).OnDelete(DeleteBehavior.Cascade);
+                  });
+
+                  builder.Entity<AuditLog>(entity =>
+                  {
+                      entity.HasIndex(x => x.CreatedAtUtc);
+                      entity.HasIndex(x => new { x.EntityName, x.EntityId });
+                      entity.Property(x => x.Action).HasMaxLength(100).IsRequired();
+                      entity.Property(x => x.EntityName).HasMaxLength(150).IsRequired();
+                      entity.Property(x => x.EntityId).HasMaxLength(100);
+                      entity.Property(x => x.IpAddress).HasMaxLength(100);
+                      entity.Property(x => x.UserAgent).HasMaxLength(1000);
+                      entity.HasOne(x => x.User).WithMany()
+                          .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.SetNull);
+                  });
+'''
+          if 'builder.Entity<EmployeeProfile>' not in text:
+              match = re.search(r'protected\s+override\s+void\s+OnModelCreating\s*\([^)]*\)\s*\{', text)
+              if not match:
+                  raise SystemExit('OnModelCreating opening brace not found')
+              start = text.find('{', match.start())
+              depth = 0
+              end = None
+              for i in range(start, len(text)):
+                  if text[i] == '{': depth += 1
+                  elif text[i] == '}':
+                      depth -= 1
+                      if depth == 0:
+                          end = i
+                          break
+              if end is None:
+                  raise SystemExit('OnModelCreating closing brace not found')
+              text = text[:end] + config + text[end:]
+
+          path.write_text(text)
+          PY
+
+      - name: Write employees controller
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > src/Outfitters.API/Controllers/EmployeesController.cs <<'EOF'
+          using System.Globalization;
+          using Microsoft.AspNetCore.Authorization;
+          using Microsoft.AspNetCore.Identity;
+          using Microsoft.AspNetCore.Mvc;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Application.Employees;
+          using Outfitters.Domain.Entities;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.API.Controllers;
+
+          [ApiController]
+          [Authorize(Roles = "SuperAdministrator,Administrator,StoreManager")]
+          [Route("api/employees")]
+          public sealed class EmployeesController : ControllerBase
+          {
+              private readonly ApplicationDbContext _db;
+              private readonly UserManager<ApplicationUser> _users;
+              private readonly RoleManager<ApplicationRole> _roles;
+
+              public EmployeesController(
+                  ApplicationDbContext db,
+                  UserManager<ApplicationUser> users,
+                  RoleManager<ApplicationRole> roles)
+              {
+                  _db = db;
+                  _users = users;
+                  _roles = roles;
+              }
+
+              [HttpGet]
+              public async Task<IActionResult> GetAll([FromQuery] Guid? storeId)
+              {
+                  var query = _db.EmployeeProfiles.AsNoTracking()
+                      .Include(x => x.User).Include(x => x.PrimaryStore).AsQueryable();
+                  if (storeId.HasValue)
+                      query = query.Where(x => x.PrimaryStoreId == storeId.Value);
+
+                  var employees = await query.OrderBy(x => x.User.LastName).ToListAsync();
+                  var result = new List<object>();
+                  foreach (var employee in employees)
+                  {
+                      result.Add(new
+                      {
+                          employee.Id,
+                          employee.EmployeeNumber,
+                          employee.User.FirstName,
+                          employee.User.LastName,
+                          employee.User.Email,
+                          employee.JobTitle,
+                          employee.Status,
+                          employee.PrimaryStoreId,
+                          PrimaryStore = employee.PrimaryStore == null ? null : employee.PrimaryStore.Name,
+                          Roles = await _users.GetRolesAsync(employee.User)
+                      });
+                  }
+                  return Ok(result);
+              }
+
+              [HttpPost]
+              public async Task<IActionResult> Create(CreateEmployeeRequest request)
+              {
+                  if (await _users.FindByEmailAsync(request.Email.Trim()) is not null)
+                      return Conflict("Email already exists.");
+
+                  foreach (var role in request.Roles.Distinct(StringComparer.OrdinalIgnoreCase))
+                      if (!await _roles.RoleExistsAsync(role))
+                          return BadRequest($"Role '{role}' does not exist.");
+
+                  var user = new ApplicationUser
+                  {
+                      UserName = request.Email.Trim(),
+                      Email = request.Email.Trim(),
+                      FirstName = request.FirstName.Trim(),
+                      LastName = request.LastName.Trim(),
+                      StoreId = request.PrimaryStoreId,
+                      EmailConfirmed = true
+                  };
+
+                  var created = await _users.CreateAsync(user, request.TemporaryPassword);
+                  if (!created.Succeeded) return BadRequest(created.Errors);
+
+                  if (request.Roles.Count > 0)
+                  {
+                      var roleResult = await _users.AddToRolesAsync(user, request.Roles.Distinct());
+                      if (!roleResult.Succeeded) return BadRequest(roleResult.Errors);
+                  }
+
+                  var employee = new EmployeeProfile
+                  {
+                      EmployeeNumber = await GenerateEmployeeNumber(),
+                      UserId = user.Id,
+                      PrimaryStoreId = request.PrimaryStoreId,
+                      JobTitle = request.JobTitle.Trim(),
+                      HireDate = request.HireDate,
+                      EmergencyContactName = request.EmergencyContactName?.Trim(),
+                      EmergencyContactPhone = request.EmergencyContactPhone?.Trim()
+                  };
+
+                  if (request.PrimaryStoreId.HasValue)
+                      employee.StoreAssignments.Add(new EmployeeStoreAssignment
+                      {
+                          StoreId = request.PrimaryStoreId.Value,
+                          IsPrimary = true
+                      });
+
+                  _db.EmployeeProfiles.Add(employee);
+                  _db.AuditLogs.Add(new AuditLog
+                  {
+                      UserId = user.Id,
+                      Action = "CreateEmployee",
+                      EntityName = nameof(EmployeeProfile),
+                      EntityId = employee.Id.ToString(),
+                      DetailsJson = System.Text.Json.JsonSerializer.Serialize(new
+                      {
+                          employee.EmployeeNumber,
+                          request.Roles,
+                          request.PrimaryStoreId
+                      })
+                  });
+                  await _db.SaveChangesAsync();
+
+                  return Ok(new { employee.Id, employee.EmployeeNumber, employee.UserId });
+              }
+
+              [HttpPost("{id:guid}/roles")]
+              public async Task<IActionResult> AssignRoles(Guid id, AssignRolesRequest request)
+              {
+                  var employee = await _db.EmployeeProfiles.Include(x => x.User)
+                      .SingleOrDefaultAsync(x => x.Id == id);
+                  if (employee is null) return NotFound();
+
+                  foreach (var role in request.Roles.Distinct(StringComparer.OrdinalIgnoreCase))
+                      if (!await _roles.RoleExistsAsync(role))
+                          return BadRequest($"Role '{role}' does not exist.");
+
+                  var current = await _users.GetRolesAsync(employee.User);
+                  var removed = await _users.RemoveFromRolesAsync(employee.User, current);
+                  if (!removed.Succeeded) return BadRequest(removed.Errors);
+
+                  var added = await _users.AddToRolesAsync(employee.User, request.Roles.Distinct());
+                  if (!added.Succeeded) return BadRequest(added.Errors);
+
+                  return NoContent();
+              }
+
+              [HttpPost("{id:guid}/attendance")]
+              public async Task<IActionResult> Attendance(Guid id, RecordAttendanceRequest request)
+              {
+                  if (!await _db.EmployeeProfiles.AnyAsync(x => x.Id == id)) return NotFound();
+
+                  var record = await _db.EmployeeAttendanceRecords.SingleOrDefaultAsync(x =>
+                      x.EmployeeProfileId == id && x.WorkDate == request.WorkDate);
+                  if (record is null)
+                  {
+                      record = new EmployeeAttendance { EmployeeProfileId = id, WorkDate = request.WorkDate };
+                      _db.EmployeeAttendanceRecords.Add(record);
+                  }
+                  record.ClockInAtUtc = request.ClockInAtUtc;
+                  record.ClockOutAtUtc = request.ClockOutAtUtc;
+                  record.Status = request.Status;
+                  record.Notes = request.Notes?.Trim();
+                  record.UpdatedAtUtc = DateTime.UtcNow;
+                  await _db.SaveChangesAsync();
+                  return Ok(record);
+              }
+
+              [Authorize(Roles = "SuperAdministrator,Administrator")]
+              [HttpPost("{id:guid}/reset-password")]
+              public async Task<IActionResult> ResetPassword(Guid id, ResetEmployeePasswordRequest request)
+              {
+                  var employee = await _db.EmployeeProfiles.Include(x => x.User)
+                      .SingleOrDefaultAsync(x => x.Id == id);
+                  if (employee is null) return NotFound();
+
+                  var token = await _users.GeneratePasswordResetTokenAsync(employee.User);
+                  var result = await _users.ResetPasswordAsync(employee.User, token, request.NewPassword);
+                  return result.Succeeded ? NoContent() : BadRequest(result.Errors);
+              }
+
+              private async Task<string> GenerateEmployeeNumber()
+              {
+                  var datePart = DateTime.UtcNow.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+                  var count = await _db.EmployeeProfiles.CountAsync(x => x.CreatedAtUtc.Date == DateTime.UtcNow.Date);
+                  return $"EMP-{datePart}-{count + 1:00000}";
+              }
+          }
+          EOF
+
+      - name: Write audit log controller
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > src/Outfitters.API/Controllers/AuditLogsController.cs <<'EOF'
+          using Microsoft.AspNetCore.Authorization;
+          using Microsoft.AspNetCore.Mvc;
+          using Microsoft.EntityFrameworkCore;
+          using Outfitters.Infrastructure.Persistence;
+
+          namespace Outfitters.API.Controllers;
+
+          [ApiController]
+          [Authorize(Roles = "SuperAdministrator,Administrator,Auditor")]
+          [Route("api/audit-logs")]
+          public sealed class AuditLogsController : ControllerBase
+          {
+              private readonly ApplicationDbContext _db;
+              public AuditLogsController(ApplicationDbContext db) => _db = db;
+
+              [HttpGet]
+              public async Task<IActionResult> Get([FromQuery] int limit = 200)
+              {
+                  limit = Math.Clamp(limit, 1, 1000);
+                  return Ok(await _db.AuditLogs.AsNoTracking()
+                      .OrderByDescending(x => x.CreatedAtUtc)
+                      .Take(limit)
+                      .ToListAsync());
+              }
+          }
+          EOF
+
+      - name: Compile before migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore OutfittersRetailManagementSystem.sln
+          dotnet build OutfittersRetailManagementSystem.sln --configuration Release --no-restore
+
+      - name: Create EF Core migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet tool install --global dotnet-ef --version 9.0.*
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          dotnet ef migrations add AddEmployeeManagementAndAudit \
+            --project src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj \
+            --startup-project src/Outfitters.API/Outfitters.API.csproj \
+            --output-dir Persistence/Migrations
+
+      - name: Build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet build OutfittersRetailManagementSystem.sln --configuration Release
+          dotnet test OutfittersRetailManagementSystem.sln --configuration Release --no-build
+
+      - name: Commit milestone 9
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src tests OutfittersRetailManagementSystem.sln Directory.Build.props docker-compose.yml global.json README.md .gitignore
+          git commit -m "Milestone 9 - Add employee management, RBAC, attendance, and audit logs"
+          git push
