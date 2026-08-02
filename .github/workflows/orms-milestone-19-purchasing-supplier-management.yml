@@ -1,0 +1,823 @@
+name: ORMS Milestone 19 - Purchasing and Supplier Management
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  milestone19:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Add purchasing models
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p src/Outfitters.Web/Models
+          mkdir -p src/Outfitters.Web/Services
+          mkdir -p src/Outfitters.Web/Components/Pages
+
+          cat > src/Outfitters.Web/Models/PurchasingModels.cs <<'EOF'
+          namespace Outfitters.Web.Models;
+
+          public sealed class PurchasingDashboardSummary
+          {
+              public int ActiveSupplierCount { get; set; }
+              public int DraftPurchaseOrderCount { get; set; }
+              public int AwaitingApprovalCount { get; set; }
+              public int OverdueDeliveryCount { get; set; }
+              public decimal OpenPurchaseOrderValue { get; set; }
+              public decimal ReceivedThisMonthValue { get; set; }
+
+              public IReadOnlyCollection<PurchaseOrderListItem> PurchaseOrders { get; set; } =
+                  Array.Empty<PurchaseOrderListItem>();
+
+              public IReadOnlyCollection<SupplierPerformanceItem> Suppliers { get; set; } =
+                  Array.Empty<SupplierPerformanceItem>();
+          }
+
+          public sealed class PurchaseOrderListItem
+          {
+              public Guid Id { get; set; }
+              public string PurchaseOrderNumber { get; set; } = string.Empty;
+              public string SupplierName { get; set; } = string.Empty;
+              public string StoreName { get; set; } = string.Empty;
+              public string Status { get; set; } = string.Empty;
+              public DateTime OrderDateUtc { get; set; }
+              public DateTime? ExpectedDeliveryDateUtc { get; set; }
+              public decimal TotalAmount { get; set; }
+              public decimal ReceivedAmount { get; set; }
+          }
+
+          public sealed class SupplierPerformanceItem
+          {
+              public Guid SupplierId { get; set; }
+              public string SupplierCode { get; set; } = string.Empty;
+              public string SupplierName { get; set; } = string.Empty;
+              public decimal OnTimeDeliveryRate { get; set; }
+              public decimal OrderAccuracyRate { get; set; }
+              public decimal ReturnRate { get; set; }
+              public decimal AverageLeadTimeDays { get; set; }
+              public decimal TotalPurchaseValue { get; set; }
+          }
+
+          public sealed class CreatePurchaseOrderRequest
+          {
+              public Guid SupplierId { get; set; }
+              public Guid StoreId { get; set; }
+              public DateTime? ExpectedDeliveryDateUtc { get; set; }
+              public string Notes { get; set; } = string.Empty;
+
+              public IReadOnlyCollection<CreatePurchaseOrderLineRequest> Lines { get; set; } =
+                  Array.Empty<CreatePurchaseOrderLineRequest>();
+          }
+
+          public sealed class CreatePurchaseOrderLineRequest
+          {
+              public Guid ProductVariantId { get; set; }
+              public decimal Quantity { get; set; }
+              public decimal UnitCost { get; set; }
+          }
+
+          public sealed class GoodsReceiptRequest
+          {
+              public Guid PurchaseOrderId { get; set; }
+              public string DeliveryReceiptNumber { get; set; } = string.Empty;
+              public string Notes { get; set; } = string.Empty;
+
+              public IReadOnlyCollection<GoodsReceiptLineRequest> Lines { get; set; } =
+                  Array.Empty<GoodsReceiptLineRequest>();
+          }
+
+          public sealed class GoodsReceiptLineRequest
+          {
+              public Guid ProductVariantId { get; set; }
+              public decimal QuantityReceived { get; set; }
+              public decimal QuantityDamaged { get; set; }
+          }
+          EOF
+
+      - name: Add purchasing API client
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Services/PurchasingApiClient.cs <<'EOF'
+          using System.Net.Http.Json;
+          using Outfitters.Web.Models;
+
+          namespace Outfitters.Web.Services;
+
+          public interface IPurchasingApiClient
+          {
+              Task<PurchasingDashboardSummary> GetDashboardAsync(
+                  CancellationToken cancellationToken = default);
+
+              Task<bool> CreatePurchaseOrderAsync(
+                  CreatePurchaseOrderRequest request,
+                  CancellationToken cancellationToken = default);
+
+              Task<bool> ReceivePurchaseOrderAsync(
+                  GoodsReceiptRequest request,
+                  CancellationToken cancellationToken = default);
+
+              Task<bool> ApprovePurchaseOrderAsync(
+                  Guid purchaseOrderId,
+                  CancellationToken cancellationToken = default);
+          }
+
+          public sealed class PurchasingApiClient : IPurchasingApiClient
+          {
+              private readonly HttpClient _httpClient;
+
+              public PurchasingApiClient(HttpClient httpClient)
+              {
+                  _httpClient = httpClient;
+              }
+
+              public async Task<PurchasingDashboardSummary> GetDashboardAsync(
+                  CancellationToken cancellationToken = default)
+              {
+                  try
+                  {
+                      return await _httpClient
+                          .GetFromJsonAsync<PurchasingDashboardSummary>(
+                              "/api/purchasing/dashboard",
+                              cancellationToken)
+                          ?? new PurchasingDashboardSummary();
+                  }
+                  catch
+                  {
+                      return new PurchasingDashboardSummary();
+                  }
+              }
+
+              public async Task<bool> CreatePurchaseOrderAsync(
+                  CreatePurchaseOrderRequest request,
+                  CancellationToken cancellationToken = default)
+              {
+                  using var response = await _httpClient.PostAsJsonAsync(
+                      "/api/purchase-orders",
+                      request,
+                      cancellationToken);
+
+                  return response.IsSuccessStatusCode;
+              }
+
+              public async Task<bool> ReceivePurchaseOrderAsync(
+                  GoodsReceiptRequest request,
+                  CancellationToken cancellationToken = default)
+              {
+                  using var response = await _httpClient.PostAsJsonAsync(
+                      $"/api/purchase-orders/{request.PurchaseOrderId}/receive",
+                      request,
+                      cancellationToken);
+
+                  return response.IsSuccessStatusCode;
+              }
+
+              public async Task<bool> ApprovePurchaseOrderAsync(
+                  Guid purchaseOrderId,
+                  CancellationToken cancellationToken = default)
+              {
+                  using var response = await _httpClient.PostAsync(
+                      $"/api/purchase-orders/{purchaseOrderId}/approve",
+                      content: null,
+                      cancellationToken);
+
+                  return response.IsSuccessStatusCode;
+              }
+          }
+          EOF
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/Outfitters.Web/Program.cs")
+          text = path.read_text()
+
+          registration = """builder.Services
+              .AddHttpClient<IPurchasingApiClient, PurchasingApiClient>(client =>
+              {
+                  client.BaseAddress = new Uri(apiBaseUrl);
+                  client.Timeout = TimeSpan.FromSeconds(30);
+              })
+              .AddHttpMessageHandler<BearerTokenHandler>();
+
+          """
+
+          if "IPurchasingApiClient" not in text:
+              marker = "var app = builder.Build();"
+              index = text.find(marker)
+
+              if index == -1:
+                  raise SystemExit("Program.cs application marker not found")
+
+              text = text[:index] + registration + text[index:]
+
+          path.write_text(text)
+          PY
+
+      - name: Add purchasing dashboard page
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Components/Pages/PurchasingDashboard.razor <<'EOF'
+          @page "/purchasing"
+          @attribute [Authorize(Roles = "Administrator,Manager,PurchasingOfficer,Accountant")]
+          @inject IPurchasingApiClient PurchasingApi
+
+          <PageTitle>Purchasing Dashboard - OUTFITTERS</PageTitle>
+
+          <div class="page-heading">
+              <div>
+                  <span class="eyebrow">Procurement control</span>
+                  <h1>Purchasing and Suppliers</h1>
+                  <p>Track purchase orders, deliveries, approvals, and supplier performance.</p>
+              </div>
+
+              <button
+                  type="button"
+                  class="primary-button compact"
+                  @onclick="LoadAsync">
+                  Refresh
+              </button>
+          </div>
+
+          <div class="metric-grid">
+              <article class="metric-card">
+                  <span>Active Suppliers</span>
+                  <strong>@_summary.ActiveSupplierCount</strong>
+              </article>
+
+              <article class="metric-card">
+                  <span>Draft Purchase Orders</span>
+                  <strong>@_summary.DraftPurchaseOrderCount</strong>
+              </article>
+
+              <article class="metric-card alert-card">
+                  <span>Awaiting Approval</span>
+                  <strong>@_summary.AwaitingApprovalCount</strong>
+              </article>
+
+              <article class="metric-card alert-card">
+                  <span>Overdue Deliveries</span>
+                  <strong>@_summary.OverdueDeliveryCount</strong>
+              </article>
+
+              <article class="metric-card">
+                  <span>Open PO Value</span>
+                  <strong>@_summary.OpenPurchaseOrderValue.ToString("C")</strong>
+              </article>
+
+              <article class="metric-card">
+                  <span>Received This Month</span>
+                  <strong>@_summary.ReceivedThisMonthValue.ToString("C")</strong>
+              </article>
+          </div>
+
+          <section class="page-card purchasing-section">
+              <div class="section-heading">
+                  <h2>Purchase Orders</h2>
+              </div>
+
+              <div class="data-table">
+                  <div class="table-row table-header purchase-order-table">
+                      <span>PO Number</span>
+                      <span>Supplier</span>
+                      <span>Store</span>
+                      <span>Status</span>
+                      <span>Expected Delivery</span>
+                      <span>Total</span>
+                      <span>Received</span>
+                  </div>
+
+                  @foreach (var item in _summary.PurchaseOrders)
+                  {
+                      <div class="table-row purchase-order-table">
+                          <strong>@item.PurchaseOrderNumber</strong>
+                          <span>@item.SupplierName</span>
+                          <span>@item.StoreName</span>
+                          <StatusBadge
+                              Text="@item.Status"
+                              Positive="@(item.Status is "Completed" or "Received")" />
+                          <span>@FormatDate(item.ExpectedDeliveryDateUtc)</span>
+                          <span>@item.TotalAmount.ToString("C")</span>
+                          <span>@item.ReceivedAmount.ToString("C")</span>
+                      </div>
+                  }
+
+                  @if (_summary.PurchaseOrders.Count == 0)
+                  {
+                      <div class="empty-state">No purchase orders are available.</div>
+                  }
+              </div>
+          </section>
+
+          <section class="page-card purchasing-section">
+              <div class="section-heading">
+                  <h2>Supplier Performance</h2>
+              </div>
+
+              <div class="data-table">
+                  <div class="table-row table-header supplier-table">
+                      <span>Supplier</span>
+                      <span>On-Time Delivery</span>
+                      <span>Order Accuracy</span>
+                      <span>Return Rate</span>
+                      <span>Avg. Lead Time</span>
+                      <span>Total Purchases</span>
+                  </div>
+
+                  @foreach (var item in _summary.Suppliers)
+                  {
+                      <div class="table-row supplier-table">
+                          <span>
+                              <strong>@item.SupplierName</strong>
+                              <small>@item.SupplierCode</small>
+                          </span>
+                          <span>@item.OnTimeDeliveryRate.ToString("0.##")%</span>
+                          <span>@item.OrderAccuracyRate.ToString("0.##")%</span>
+                          <span>@item.ReturnRate.ToString("0.##")%</span>
+                          <span>@item.AverageLeadTimeDays.ToString("0.##") days</span>
+                          <span>@item.TotalPurchaseValue.ToString("C")</span>
+                      </div>
+                  }
+
+                  @if (_summary.Suppliers.Count == 0)
+                  {
+                      <div class="empty-state">No supplier performance data is available.</div>
+                  }
+              </div>
+          </section>
+
+          @code {
+              private PurchasingDashboardSummary _summary = new();
+
+              protected override async Task OnInitializedAsync()
+              {
+                  await LoadAsync();
+              }
+
+              private async Task LoadAsync()
+              {
+                  _summary = await PurchasingApi.GetDashboardAsync();
+              }
+
+              private static string FormatDate(DateTime? value) =>
+                  value.HasValue
+                      ? value.Value.ToLocalTime().ToString("MMM d, yyyy")
+                      : "—";
+          }
+          EOF
+
+      - name: Add purchase order creation page
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Components/Pages/CreatePurchaseOrder.razor <<'EOF'
+          @page "/purchasing/orders/new"
+          @attribute [Authorize(Roles = "Administrator,Manager,PurchasingOfficer")]
+          @inject IPurchasingApiClient PurchasingApi
+
+          <PageTitle>New Purchase Order - OUTFITTERS</PageTitle>
+
+          <div class="page-heading">
+              <div>
+                  <span class="eyebrow">Procurement</span>
+                  <h1>Create Purchase Order</h1>
+                  <p>Create a draft purchase order for approval and delivery tracking.</p>
+              </div>
+          </div>
+
+          <section class="page-card purchasing-form">
+              <div class="form-grid">
+                  <label>
+                      Supplier ID
+                      <input @bind="_supplierIdText" />
+                  </label>
+
+                  <label>
+                      Store ID
+                      <input @bind="_storeIdText" />
+                  </label>
+              </div>
+
+              <div class="form-grid">
+                  <label>
+                      Product Variant ID
+                      <input @bind="_productVariantIdText" />
+                  </label>
+
+                  <label>
+                      Expected Delivery
+                      <InputDate @bind-Value="_expectedDelivery" />
+                  </label>
+              </div>
+
+              <div class="form-grid">
+                  <label>
+                      Quantity
+                      <input type="number" min="1" step="1" @bind="_quantity" />
+                  </label>
+
+                  <label>
+                      Unit Cost
+                      <input type="number" min="0" step="0.01" @bind="_unitCost" />
+                  </label>
+              </div>
+
+              <label>
+                  Notes
+                  <textarea rows="4" @bind="_notes"></textarea>
+              </label>
+
+              @if (!string.IsNullOrWhiteSpace(_message))
+              {
+                  <div class="@(_success ? "success-message" : "error-message")">
+                      @_message
+                  </div>
+              }
+
+              <button
+                  type="button"
+                  class="primary-button"
+                  disabled="@_submitting"
+                  @onclick="SubmitAsync">
+                  @(_submitting ? "Creating..." : "Create Purchase Order")
+              </button>
+          </section>
+
+          @code {
+              private string _supplierIdText = string.Empty;
+              private string _storeIdText = string.Empty;
+              private string _productVariantIdText = string.Empty;
+              private decimal _quantity = 1m;
+              private decimal _unitCost;
+              private DateTime _expectedDelivery = DateTime.Today.AddDays(7);
+              private string _notes = string.Empty;
+              private string? _message;
+              private bool _success;
+              private bool _submitting;
+
+              private async Task SubmitAsync()
+              {
+                  _message = null;
+                  _success = false;
+
+                  if (!Guid.TryParse(_supplierIdText, out var supplierId) ||
+                      !Guid.TryParse(_storeIdText, out var storeId) ||
+                      !Guid.TryParse(_productVariantIdText, out var productVariantId))
+                  {
+                      _message = "Enter valid supplier, store, and product variant IDs.";
+                      return;
+                  }
+
+                  if (_quantity <= 0m)
+                  {
+                      _message = "Quantity must be greater than zero.";
+                      return;
+                  }
+
+                  _submitting = true;
+
+                  _success = await PurchasingApi.CreatePurchaseOrderAsync(
+                      new CreatePurchaseOrderRequest
+                      {
+                          SupplierId = supplierId,
+                          StoreId = storeId,
+                          ExpectedDeliveryDateUtc =
+                              _expectedDelivery.ToUniversalTime(),
+                          Notes = _notes,
+                          Lines = new[]
+                          {
+                              new CreatePurchaseOrderLineRequest
+                              {
+                                  ProductVariantId = productVariantId,
+                                  Quantity = _quantity,
+                                  UnitCost = _unitCost
+                              }
+                          }
+                      });
+
+                  _submitting = false;
+                  _message = _success
+                      ? "Purchase order created successfully."
+                      : "The purchase order could not be created.";
+              }
+          }
+          EOF
+
+      - name: Add goods receiving page
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Components/Pages/GoodsReceiving.razor <<'EOF'
+          @page "/purchasing/receiving"
+          @attribute [Authorize(Roles = "Administrator,Manager,PurchasingOfficer,InventoryStaff")]
+          @inject IPurchasingApiClient PurchasingApi
+
+          <PageTitle>Goods Receiving - OUTFITTERS</PageTitle>
+
+          <div class="page-heading">
+              <div>
+                  <span class="eyebrow">Warehouse receiving</span>
+                  <h1>Goods Receiving</h1>
+                  <p>Receive purchase orders and record delivered or damaged quantities.</p>
+              </div>
+          </div>
+
+          <section class="page-card purchasing-form">
+              <div class="form-grid">
+                  <label>
+                      Purchase Order ID
+                      <input @bind="_purchaseOrderIdText" />
+                  </label>
+
+                  <label>
+                      Delivery Receipt Number
+                      <input @bind="_deliveryReceiptNumber" />
+                  </label>
+              </div>
+
+              <div class="form-grid">
+                  <label>
+                      Product Variant ID
+                      <input @bind="_productVariantIdText" />
+                  </label>
+
+                  <label>
+                      Quantity Received
+                      <input type="number" min="0" step="1" @bind="_quantityReceived" />
+                  </label>
+              </div>
+
+              <label>
+                  Quantity Damaged
+                  <input type="number" min="0" step="1" @bind="_quantityDamaged" />
+              </label>
+
+              <label>
+                  Notes
+                  <textarea rows="4" @bind="_notes"></textarea>
+              </label>
+
+              @if (!string.IsNullOrWhiteSpace(_message))
+              {
+                  <div class="@(_success ? "success-message" : "error-message")">
+                      @_message
+                  </div>
+              }
+
+              <button
+                  type="button"
+                  class="primary-button"
+                  disabled="@_submitting"
+                  @onclick="SubmitAsync">
+                  @(_submitting ? "Receiving..." : "Post Goods Receipt")
+              </button>
+          </section>
+
+          @code {
+              private string _purchaseOrderIdText = string.Empty;
+              private string _deliveryReceiptNumber = string.Empty;
+              private string _productVariantIdText = string.Empty;
+              private decimal _quantityReceived;
+              private decimal _quantityDamaged;
+              private string _notes = string.Empty;
+              private string? _message;
+              private bool _success;
+              private bool _submitting;
+
+              private async Task SubmitAsync()
+              {
+                  _message = null;
+                  _success = false;
+
+                  if (!Guid.TryParse(
+                      _purchaseOrderIdText,
+                      out var purchaseOrderId) ||
+                      !Guid.TryParse(
+                          _productVariantIdText,
+                          out var productVariantId))
+                  {
+                      _message = "Enter valid purchase order and product variant IDs.";
+                      return;
+                  }
+
+                  _submitting = true;
+
+                  _success = await PurchasingApi.ReceivePurchaseOrderAsync(
+                      new GoodsReceiptRequest
+                      {
+                          PurchaseOrderId = purchaseOrderId,
+                          DeliveryReceiptNumber = _deliveryReceiptNumber,
+                          Notes = _notes,
+                          Lines = new[]
+                          {
+                              new GoodsReceiptLineRequest
+                              {
+                                  ProductVariantId = productVariantId,
+                                  QuantityReceived = _quantityReceived,
+                                  QuantityDamaged = _quantityDamaged
+                              }
+                          }
+                      });
+
+                  _submitting = false;
+                  _message = _success
+                      ? "Goods receipt posted successfully."
+                      : "The goods receipt could not be posted.";
+              }
+          }
+          EOF
+
+      - name: Update purchasing navigation and styles
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/Outfitters.Web/Components/Layout/MainLayout.razor")
+          text = path.read_text()
+
+          marker = '<NavLink href="/inventory">Inventory</NavLink>'
+
+          additions = (
+              marker
+              + '\n                      <NavLink href="/purchasing">'
+              + 'Purchasing</NavLink>'
+              + '\n                      <NavLink href="/purchasing/orders/new">'
+              + 'New Purchase Order</NavLink>'
+              + '\n                      <NavLink href="/purchasing/receiving">'
+              + 'Goods Receiving</NavLink>'
+          )
+
+          if 'href="/purchasing"' not in text:
+              text = text.replace(marker, additions, 1)
+
+          path.write_text(text)
+          PY
+
+          cat >> src/Outfitters.Web/wwwroot/css/site.css <<'EOF'
+
+          .purchasing-section {
+              margin-bottom: 18px;
+              padding: 0;
+              overflow: hidden;
+          }
+
+          .purchasing-section .section-heading {
+              padding: 18px;
+          }
+
+          .purchase-order-table {
+              grid-template-columns:
+                  120px
+                  minmax(160px, 1.3fr)
+                  minmax(120px, 1fr)
+                  110px
+                  130px
+                  110px
+                  110px;
+          }
+
+          .supplier-table {
+              grid-template-columns:
+                  minmax(180px, 1.4fr)
+                  120px
+                  110px
+                  100px
+                  110px
+                  130px;
+          }
+
+          .purchasing-form {
+              display: grid;
+              gap: 18px;
+          }
+
+          .purchasing-form label {
+              display: grid;
+              gap: 8px;
+              color: #c6c8ce;
+          }
+
+          .purchasing-form input,
+          .purchasing-form textarea {
+              width: 100%;
+              padding: 12px 14px;
+              border: 1px solid #343740;
+              border-radius: 10px;
+              color: #fff;
+              background: #111317;
+          }
+
+          @media (max-width: 1100px) {
+              .purchase-order-table,
+              .supplier-table {
+                  grid-template-columns: 1fr;
+              }
+
+              .purchase-order-table.table-header,
+              .supplier-table.table-header {
+                  display: none;
+              }
+          }
+          EOF
+
+      - name: Normalize Razor directives
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("src/Outfitters.Web")
+          pattern = re.compile(
+              r"^\s*@(page|attribute|inject|using|namespace|inherits|layout|"
+              r"implements|typeparam|rendermode)\b"
+          )
+
+          for path in root.rglob("*.razor"):
+              lines = path.read_text(encoding="utf-8-sig").splitlines()
+              normalized = [
+                  line.lstrip() if pattern.match(line) else line
+                  for line in lines
+              ]
+
+              path.write_text(
+                  "\n".join(normalized).rstrip() + "\n",
+                  encoding="utf-8"
+              )
+          PY
+
+      - name: Restore build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          dotnet restore OutfittersRetailManagementSystem.sln
+          dotnet build OutfittersRetailManagementSystem.sln \
+            --configuration Release \
+            --no-restore
+          dotnet test OutfittersRetailManagementSystem.sln \
+            --configuration Release \
+            --no-build
+
+      - name: Commit milestone 19
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add src/Outfitters.Web
+
+          if git diff --cached --quiet
+          then
+            echo "Milestone 19 is already committed."
+            exit 0
+          fi
+
+          git commit -m \
+            "Milestone 19 - Add purchasing and supplier management UI"
+
+          for attempt in 1 2 3
+          do
+            git fetch origin main
+            git rebase origin/main
+
+            if git push origin HEAD:main
+            then
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]
+            then
+              sleep 5
+            fi
+          done
+
+          echo "Unable to push Milestone 19 after three attempts."
+          exit 1
