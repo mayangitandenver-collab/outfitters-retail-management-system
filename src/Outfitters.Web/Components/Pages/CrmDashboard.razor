@@ -1,0 +1,133 @@
+@page "/customers/crm"
+@attribute [Authorize(Roles = "Administrator,Manager,Cashier")]
+@inject ICrmApiClient CrmApi
+
+<PageTitle>Customer Loyalty and CRM - OUTFITTERS</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">Customer growth</span>
+        <h1>Customer Loyalty and CRM</h1>
+        <p>Track retention, loyalty balances, customer value, and engagement.</p>
+    </div>
+
+    <button
+        type="button"
+        class="primary-button compact"
+        @onclick="LoadAsync">
+        Refresh
+    </button>
+</div>
+
+<div class="metric-grid">
+    <article class="metric-card">
+        <span>Total Customers</span>
+        <strong>@_summary.TotalCustomers</strong>
+    </article>
+
+    <article class="metric-card">
+        <span>New This Month</span>
+        <strong>@_summary.NewCustomersThisMonth</strong>
+    </article>
+
+    <article class="metric-card">
+        <span>Active Customers</span>
+        <strong>@_summary.ActiveCustomers</strong>
+    </article>
+
+    <article class="metric-card alert-card">
+        <span>At-Risk Customers</span>
+        <strong>@_summary.AtRiskCustomers</strong>
+    </article>
+
+    <article class="metric-card">
+        <span>Birthday Customers</span>
+        <strong>@_summary.BirthdayCustomersThisMonth</strong>
+    </article>
+
+    <article class="metric-card">
+        <span>Average Spend</span>
+        <strong>@_summary.AverageCustomerSpend.ToString("C")</strong>
+    </article>
+</div>
+
+<section class="page-card crm-section">
+    <div class="section-heading">
+        <h2>Top Customers</h2>
+    </div>
+
+    <div class="data-table">
+        <div class="table-row table-header crm-customer-table">
+            <span>Customer</span>
+            <span>Tier</span>
+            <span>Lifetime Spend</span>
+            <span>Purchases</span>
+            <span>Points</span>
+            <span>Store Credit</span>
+        </div>
+
+        @foreach (var item in _summary.TopCustomers)
+        {
+            <div class="table-row crm-customer-table">
+                <span>
+                    <strong>@item.CustomerName</strong>
+                    <small>@item.CustomerNumber</small>
+                </span>
+                <span>@item.TierName</span>
+                <span>@item.LifetimeSpend.ToString("C")</span>
+                <span>@item.PurchaseCount</span>
+                <span>@item.LoyaltyPointsBalance.ToString("0.##")</span>
+                <span>@item.StoreCreditBalance.ToString("C")</span>
+            </div>
+        }
+
+        @if (_summary.TopCustomers.Count == 0)
+        {
+            <div class="empty-state">No customer ranking data is available.</div>
+        }
+    </div>
+</section>
+
+<section class="page-card crm-section">
+    <div class="section-heading">
+        <h2>Customer Segments</h2>
+    </div>
+
+    <div class="data-table">
+        <div class="table-row table-header crm-segment-table">
+            <span>Segment</span>
+            <span>Customers</span>
+            <span>Total Spend</span>
+            <span>Average Spend</span>
+        </div>
+
+        @foreach (var item in _summary.Segments)
+        {
+            <div class="table-row crm-segment-table">
+                <strong>@item.SegmentName</strong>
+                <span>@item.CustomerCount</span>
+                <span>@item.TotalSpend.ToString("C")</span>
+                <span>@item.AverageSpend.ToString("C")</span>
+            </div>
+        }
+
+        @if (_summary.Segments.Count == 0)
+        {
+            <div class="empty-state">No customer segmentation data is available.</div>
+        }
+    </div>
+</section>
+
+@code {
+    private CrmDashboardSummary _summary = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _summary = await CrmApi.GetDashboardAsync();
+    }
+}

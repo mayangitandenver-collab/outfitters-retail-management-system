@@ -853,3 +853,79 @@ input {
         display: none;
     }
 }
+
+.crm-section {
+    margin-bottom: 18px;
+    padding: 0;
+    overflow: hidden;
+}
+
+.crm-section .section-heading {
+    padding: 18px;
+}
+
+.crm-customer-table {
+    grid-template-columns:
+        minmax(180px, 1.5fr)
+        90px
+        120px
+        90px
+        90px
+        110px;
+}
+
+.crm-segment-table {
+    grid-template-columns:
+        minmax(180px, 1.4fr)
+        100px
+        120px
+        120px;
+}
+
+.crm-tools-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 18px;
+    margin-bottom: 18px;
+}
+
+.crm-tool-card {
+    display: grid;
+    gap: 14px;
+}
+
+.crm-tool-card h2 {
+    margin: 0 0 4px;
+}
+
+.crm-tool-card label {
+    display: grid;
+    gap: 8px;
+    color: #c6c8ce;
+}
+
+.crm-tool-card input,
+.crm-tool-card textarea {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid #343740;
+    border-radius: 10px;
+    color: #fff;
+    background: #111317;
+}
+
+@media (max-width: 1050px) {
+    .crm-tools-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .crm-customer-table,
+    .crm-segment-table {
+        grid-template-columns: 1fr;
+    }
+
+    .crm-customer-table.table-header,
+    .crm-segment-table.table-header {
+        display: none;
+    }
+}
