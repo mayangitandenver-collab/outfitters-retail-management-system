@@ -1,0 +1,212 @@
+@page "/customers/loyalty-tools"
+@attribute [Authorize(Roles = "Administrator,Manager,Cashier")]
+@inject ICrmApiClient CrmApi
+
+<PageTitle>Loyalty Tools - OUTFITTERS</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">Customer service</span>
+        <h1>Loyalty Tools</h1>
+        <p>Adjust points, issue store credit, and create customer vouchers.</p>
+    </div>
+</div>
+
+<div class="crm-tools-grid">
+    <section class="page-card crm-tool-card">
+        <h2>Adjust Loyalty Points</h2>
+
+        <label>
+            Customer ID
+            <input @bind="_loyaltyCustomerIdText" />
+        </label>
+
+        <label>
+            Points Change
+            <input type="number" step="1" @bind="_pointsChange" />
+        </label>
+
+        <label>
+            Notes
+            <textarea rows="3" @bind="_loyaltyNotes"></textarea>
+        </label>
+
+        <button
+            type="button"
+            class="primary-button"
+            @onclick="AdjustLoyaltyAsync">
+            Save Loyalty Adjustment
+        </button>
+    </section>
+
+    <section class="page-card crm-tool-card">
+        <h2>Adjust Store Credit</h2>
+
+        <label>
+            Customer ID
+            <input @bind="_creditCustomerIdText" />
+        </label>
+
+        <label>
+            Amount Change
+            <input type="number" step="0.01" @bind="_creditChange" />
+        </label>
+
+        <label>
+            Notes
+            <textarea rows="3" @bind="_creditNotes"></textarea>
+        </label>
+
+        <button
+            type="button"
+            class="primary-button"
+            @onclick="AdjustCreditAsync">
+            Save Store Credit Adjustment
+        </button>
+    </section>
+
+    <section class="page-card crm-tool-card">
+        <h2>Create Voucher</h2>
+
+        <label>
+            Customer ID
+            <input @bind="_voucherCustomerIdText" />
+        </label>
+
+        <label>
+            Discount Amount
+            <input type="number" step="0.01" @bind="_voucherAmount" />
+        </label>
+
+        <label>
+            Discount Percent
+            <input type="number" step="0.01" @bind="_voucherPercent" />
+        </label>
+
+        <label>
+            Minimum Spend
+            <input type="number" step="0.01" @bind="_minimumSpend" />
+        </label>
+
+        <label>
+            Valid Until
+            <InputDate @bind-Value="_validUntil" />
+        </label>
+
+        <button
+            type="button"
+            class="primary-button"
+            @onclick="CreateVoucherAsync">
+            Create Voucher
+        </button>
+    </section>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="@(_success ? "success-message" : "error-message")">
+        @_message
+    </div>
+}
+
+@code {
+    private string _loyaltyCustomerIdText = string.Empty;
+    private decimal _pointsChange;
+    private string _loyaltyNotes = string.Empty;
+
+    private string _creditCustomerIdText = string.Empty;
+    private decimal _creditChange;
+    private string _creditNotes = string.Empty;
+
+    private string _voucherCustomerIdText = string.Empty;
+    private decimal _voucherAmount;
+    private decimal _voucherPercent;
+    private decimal _minimumSpend;
+    private DateTime _validUntil = DateTime.Today.AddDays(30);
+
+    private string? _message;
+    private bool _success;
+
+    private async Task AdjustLoyaltyAsync()
+    {
+        if (!Guid.TryParse(
+            _loyaltyCustomerIdText,
+            out var customerId))
+        {
+            SetMessage(false, "Enter a valid customer ID.");
+            return;
+        }
+
+        var success = await CrmApi.AdjustLoyaltyAsync(
+            new LoyaltyAdjustmentRequest
+            {
+                CustomerId = customerId,
+                PointsChange = _pointsChange,
+                Notes = _loyaltyNotes
+            });
+
+        SetMessage(
+            success,
+            success
+                ? "Loyalty points updated."
+                : "The loyalty adjustment failed.");
+    }
+
+    private async Task AdjustCreditAsync()
+    {
+        if (!Guid.TryParse(
+            _creditCustomerIdText,
+            out var customerId))
+        {
+            SetMessage(false, "Enter a valid customer ID.");
+            return;
+        }
+
+        var success = await CrmApi.AdjustStoreCreditAsync(
+            new StoreCreditAdjustmentRequest
+            {
+                CustomerId = customerId,
+                AmountChange = _creditChange,
+                Notes = _creditNotes
+            });
+
+        SetMessage(
+            success,
+            success
+                ? "Store credit updated."
+                : "The store-credit adjustment failed.");
+    }
+
+    private async Task CreateVoucherAsync()
+    {
+        if (!Guid.TryParse(
+            _voucherCustomerIdText,
+            out var customerId))
+        {
+            SetMessage(false, "Enter a valid customer ID.");
+            return;
+        }
+
+        var success = await CrmApi.CreateVoucherAsync(
+            new CustomerVoucherRequest
+            {
+                CustomerId = customerId,
+                DiscountAmount = _voucherAmount,
+                DiscountPercent = _voucherPercent,
+                MinimumSpend = _minimumSpend,
+                ValidUntilUtc = _validUntil.ToUniversalTime()
+            });
+
+        SetMessage(
+            success,
+            success
+                ? "Customer voucher created."
+                : "The voucher could not be created.");
+    }
+
+    private void SetMessage(bool success, string message)
+    {
+        _success = success;
+        _message = message;
+    }
+}
