@@ -1,17 +1,70 @@
 @page "/employees"
+@inject IRetailApiClient RetailApi
 
 <PageTitle>Employees - OUTFITTERS</PageTitle>
 
 <div class="page-heading">
     <div>
-        <span class="eyebrow">Module</span>
+        <span class="eyebrow">Workforce</span>
         <h1>Employees</h1>
-        <p>Manage staff accounts, attendance, roles, and permissions.</p>
+        <p>Manage employee accounts, roles, and access status.</p>
     </div>
 </div>
 
-<section class="page-card">
-    <div class="empty-state">
-        The Employees workspace is ready for the next UI sprint.
+<ModuleToolbar
+    @bind-SearchText="_search"
+    Placeholder="Search employees..."
+    PrimaryText="Add Employee"
+    SecondaryText="Attendance" />
+
+<section class="page-card table-card">
+    <div class="data-table">
+        <div class="table-row table-header employee-table">
+            <span>Employee</span>
+            <span>Email</span>
+            <span>Role</span>
+            <span>Status</span>
+        </div>
+
+        @foreach (var item in FilteredItems)
+        {
+            <div class="table-row employee-table">
+                <strong>@item.FullName</strong>
+                <span>@item.Email</span>
+                <span>@item.RoleName</span>
+                <StatusBadge
+                    Text="@(item.IsActive ? "Active" : "Inactive")"
+                    Positive="@item.IsActive" />
+            </div>
+        }
+
+        @if (!FilteredItems.Any())
+        {
+            <div class="empty-state">No employees found.</div>
+        }
     </div>
 </section>
+
+@code {
+    private IReadOnlyCollection<EmployeeListItem> _items =
+        Array.Empty<EmployeeListItem>();
+    private string _search = string.Empty;
+
+    private IEnumerable<EmployeeListItem> FilteredItems =>
+        _items.Where(x =>
+            string.IsNullOrWhiteSpace(_search) ||
+            x.FullName.Contains(
+                _search,
+                StringComparison.OrdinalIgnoreCase) ||
+            x.Email.Contains(
+                _search,
+                StringComparison.OrdinalIgnoreCase) ||
+            x.RoleName.Contains(
+                _search,
+                StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        _items = await RetailApi.GetEmployeesAsync();
+    }
+}

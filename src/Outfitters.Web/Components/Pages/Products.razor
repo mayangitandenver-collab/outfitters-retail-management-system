@@ -1,0 +1,65 @@
+@page "/products"
+@inject IRetailApiClient RetailApi
+
+<PageTitle>Products - OUTFITTERS</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">Catalog</span>
+        <h1>Products</h1>
+        <p>Manage apparel products, categories, and variants.</p>
+    </div>
+</div>
+
+<ModuleToolbar
+    @bind-SearchText="_search"
+    Placeholder="Search products..."
+    PrimaryText="Add Product"
+    SecondaryText="Import" />
+
+<section class="page-card table-card">
+    <div class="data-table">
+        <div class="table-row table-header product-table">
+            <span>Product</span>
+            <span>Category</span>
+            <span>Status</span>
+        </div>
+
+        @foreach (var item in FilteredItems)
+        {
+            <div class="table-row product-table">
+                <strong>@item.Name</strong>
+                <span>@item.CategoryName</span>
+                <StatusBadge
+                    Text="@(item.IsActive ? "Active" : "Inactive")"
+                    Positive="@item.IsActive" />
+            </div>
+        }
+
+        @if (!FilteredItems.Any())
+        {
+            <div class="empty-state">No products found.</div>
+        }
+    </div>
+</section>
+
+@code {
+    private IReadOnlyCollection<ProductListItem> _items =
+        Array.Empty<ProductListItem>();
+    private string _search = string.Empty;
+
+    private IEnumerable<ProductListItem> FilteredItems =>
+        _items.Where(x =>
+            string.IsNullOrWhiteSpace(_search) ||
+            x.Name.Contains(
+                _search,
+                StringComparison.OrdinalIgnoreCase) ||
+            x.CategoryName.Contains(
+                _search,
+                StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        _items = await RetailApi.GetProductsAsync();
+    }
+}

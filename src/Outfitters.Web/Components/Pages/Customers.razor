@@ -1,17 +1,73 @@
 @page "/customers"
+@inject IRetailApiClient RetailApi
 
 <PageTitle>Customers - OUTFITTERS</PageTitle>
 
 <div class="page-heading">
     <div>
-        <span class="eyebrow">Module</span>
+        <span class="eyebrow">CRM</span>
         <h1>Customers</h1>
-        <p>Manage customer profiles, loyalty points, and purchase history.</p>
+        <p>Manage profiles, loyalty points, and membership tiers.</p>
     </div>
 </div>
 
-<section class="page-card">
-    <div class="empty-state">
-        The Customers workspace is ready for the next UI sprint.
+<ModuleToolbar
+    @bind-SearchText="_search"
+    Placeholder="Search customer name, email, or phone..."
+    PrimaryText="Add Customer" />
+
+<section class="page-card table-card">
+    <div class="data-table">
+        <div class="table-row table-header customer-table">
+            <span>Customer</span>
+            <span>Contact</span>
+            <span>Tier</span>
+            <span>Points</span>
+        </div>
+
+        @foreach (var item in FilteredItems)
+        {
+            <div class="table-row customer-table">
+                <strong>@item.FullName</strong>
+                <span>
+                    @item.Email
+                    @if (!string.IsNullOrWhiteSpace(item.PhoneNumber))
+                    {
+                        <small>@item.PhoneNumber</small>
+                    }
+                </span>
+                <span>@item.TierName</span>
+                <strong>@item.LoyaltyPoints.ToString("0.##")</strong>
+            </div>
+        }
+
+        @if (!FilteredItems.Any())
+        {
+            <div class="empty-state">No customers found.</div>
+        }
     </div>
 </section>
+
+@code {
+    private IReadOnlyCollection<CustomerListItem> _items =
+        Array.Empty<CustomerListItem>();
+    private string _search = string.Empty;
+
+    private IEnumerable<CustomerListItem> FilteredItems =>
+        _items.Where(x =>
+            string.IsNullOrWhiteSpace(_search) ||
+            x.FullName.Contains(
+                _search,
+                StringComparison.OrdinalIgnoreCase) ||
+            (x.Email?.Contains(
+                _search,
+                StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (x.PhoneNumber?.Contains(
+                _search,
+                StringComparison.OrdinalIgnoreCase) ?? false));
+
+    protected override async Task OnInitializedAsync()
+    {
+        _items = await RetailApi.GetCustomersAsync(null);
+    }
+}

@@ -1,17 +1,319 @@
 @page "/pos"
+@inject IRetailApiClient RetailApi
+@inject IJSRuntime JavaScript
 
 <PageTitle>Point of Sale - OUTFITTERS</PageTitle>
 
-<div class="page-heading">
-    <div>
-        <span class="eyebrow">Module</span>
-        <h1>Point of Sale</h1>
-        <p>Scan products, build carts, accept payments, and print receipts.</p>
-    </div>
+<div class="pos-layout">
+    <section class="pos-catalog">
+        <div class="page-heading pos-heading">
+            <div>
+                <span class="eyebrow">Cashier</span>
+                <h1>Point of Sale</h1>
+                <p>Scan a barcode or search for a product.</p>
+            </div>
+            <button class="ghost-button" @onclick="ClearCart">
+                New transaction
+            </button>
+        </div>
+
+        <div class="pos-search">
+            <input
+                @bind="_search"
+                @bind:event="oninput"
+                @onkeydown="SearchOnEnter"
+                placeholder="Scan barcode or enter product name..." />
+            <button class="primary-button compact" @onclick="SearchAsync">
+                Search
+            </button>
+        </div>
+
+        <div class="product-results">
+            @if (_searching)
+            {
+                <div class="empty-state">Searching products...</div>
+            }
+            else if (_results.Count == 0)
+            {
+                <div class="empty-state">
+                    Product results will appear here.
+                </div>
+            }
+            else
+            {
+                @foreach (var product in _results)
+                {
+                    <button
+                        type="button"
+                        class="product-tile"
+                        @onclick="() => AddToCart(product)">
+                        <span class="product-title">@product.ProductName</span>
+                        <span class="product-variant">@product.VariantName</span>
+                        <span class="product-stock">
+                            Stock: @product.AvailableQuantity.ToString("0.##")
+                        </span>
+                        <strong>@product.UnitPrice.ToString("C")</strong>
+                    </button>
+                }
+            }
+        </div>
+    </section>
+
+    <aside class="cart-panel">
+        <div class="cart-header">
+            <div>
+                <span class="eyebrow">Current sale</span>
+                <h2>Cart</h2>
+            </div>
+            <span>@_cart.Count item(s)</span>
+        </div>
+
+        <div class="cart-items">
+            @if (_cart.Count == 0)
+            {
+                <div class="empty-state">
+                    Scan or select a product to begin.
+                </div>
+            }
+            else
+            {
+                @foreach (var item in _cart)
+                {
+                    <article class="cart-item">
+                        <div>
+                            <strong>@item.ProductName</strong>
+                            <span>@item.VariantName</span>
+                        </div>
+
+                        <div class="quantity-controls">
+                            <button @onclick="() => Decrease(item)">−</button>
+                            <span>@item.Quantity.ToString("0.##")</span>
+                            <button @onclick="() => Increase(item)">+</button>
+                        </div>
+
+                        <div class="cart-line-total">
+                            <strong>@item.LineTotal.ToString("C")</strong>
+                            <button
+                                class="link-button danger"
+                                @onclick="() => Remove(item)">
+                                Remove
+                            </button>
+                        </div>
+                    </article>
+                }
+            }
+        </div>
+
+        <div class="cart-summary">
+            <div>
+                <span>Subtotal</span>
+                <strong>@Subtotal.ToString("C")</strong>
+            </div>
+            <div>
+                <span>Discounts</span>
+                <strong>@DiscountTotal.ToString("C")</strong>
+            </div>
+            <div class="grand-total">
+                <span>Total</span>
+                <strong>@GrandTotal.ToString("C")</strong>
+            </div>
+        </div>
+
+        <div class="payment-section">
+            <label>
+                Payment method
+                <select @bind="_paymentMethod">
+                    <option>Cash</option>
+                    <option>Card</option>
+                    <option>GCash</option>
+                    <option>Bank Transfer</option>
+                </select>
+            </label>
+
+            <label>
+                Amount received
+                <input type="number" step="0.01" @bind="_amountReceived" />
+            </label>
+
+            <div class="change-row">
+                <span>Change</span>
+                <strong>@ChangeAmount.ToString("C")</strong>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(_message))
+            {
+                <div class="@(_checkoutSucceeded ? "success-message" : "error-message")">
+                    @_message
+                </div>
+            }
+
+            <button
+                class="primary-button checkout-button"
+                disabled="@(!_cart.Any() || _processing)"
+                @onclick="CheckoutAsync">
+                @(_processing ? "Processing..." : "Complete Sale")
+            </button>
+        </div>
+    </aside>
 </div>
 
-<section class="page-card">
-    <div class="empty-state">
-        The Point of Sale workspace is ready for the next UI sprint.
-    </div>
-</section>
+@code {
+    private readonly List<PosCartItem> _cart = new();
+    private IReadOnlyCollection<PosProduct> _results =
+        Array.Empty<PosProduct>();
+    private string _search = string.Empty;
+    private string _paymentMethod = "Cash";
+    private decimal _amountReceived;
+    private bool _searching;
+    private bool _processing;
+    private bool _checkoutSucceeded;
+    private string? _message;
+
+    private decimal Subtotal =>
+        _cart.Sum(x => x.UnitPrice * x.Quantity);
+
+    private decimal DiscountTotal =>
+        _cart.Sum(x => x.DiscountAmount);
+
+    private decimal GrandTotal =>
+        Math.Max(0m, Subtotal - DiscountTotal);
+
+    private decimal ChangeAmount =>
+        Math.Max(0m, _amountReceived - GrandTotal);
+
+    private async Task SearchOnEnter(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter")
+        {
+            await SearchAsync();
+        }
+    }
+
+    private async Task SearchAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_search))
+        {
+            return;
+        }
+
+        _searching = true;
+        _results = await RetailApi.SearchProductsAsync(_search, null);
+        _searching = false;
+
+        if (_results.Count == 1)
+        {
+            AddToCart(_results.First());
+            _search = string.Empty;
+        }
+    }
+
+    private void AddToCart(PosProduct product)
+    {
+        var existing = _cart.FirstOrDefault(x =>
+            x.ProductVariantId == product.ProductVariantId);
+
+        if (existing is not null)
+        {
+            existing.Quantity += 1m;
+        }
+        else
+        {
+            _cart.Add(new PosCartItem
+            {
+                ProductVariantId = product.ProductVariantId,
+                ProductName = product.ProductName,
+                VariantName = product.VariantName,
+                UnitPrice = product.UnitPrice,
+                Quantity = 1m
+            });
+        }
+
+        _amountReceived = GrandTotal;
+    }
+
+    private void Increase(PosCartItem item)
+    {
+        item.Quantity += 1m;
+        _amountReceived = GrandTotal;
+    }
+
+    private void Decrease(PosCartItem item)
+    {
+        item.Quantity -= 1m;
+
+        if (item.Quantity <= 0)
+        {
+            _cart.Remove(item);
+        }
+
+        _amountReceived = GrandTotal;
+    }
+
+    private void Remove(PosCartItem item)
+    {
+        _cart.Remove(item);
+        _amountReceived = GrandTotal;
+    }
+
+    private void ClearCart()
+    {
+        _cart.Clear();
+        _results = Array.Empty<PosProduct>();
+        _search = string.Empty;
+        _amountReceived = 0m;
+        _message = null;
+    }
+
+    private async Task CheckoutAsync()
+    {
+        _processing = true;
+        _message = null;
+        _checkoutSucceeded = false;
+
+        if (_amountReceived < GrandTotal)
+        {
+            _message = "The received amount is less than the total.";
+            _processing = false;
+            return;
+        }
+
+        var request = new CreateSaleRequest
+        {
+            StoreId = Guid.Empty,
+            Items = _cart.Select(x => new CreateSaleLineRequest
+            {
+                ProductVariantId = x.ProductVariantId,
+                Quantity = x.Quantity,
+                UnitPrice = x.UnitPrice,
+                DiscountAmount = x.DiscountAmount
+            }).ToArray(),
+            Payments = new[]
+            {
+                new CheckoutPayment
+                {
+                    Method = _paymentMethod,
+                    Amount = GrandTotal
+                }
+            }
+        };
+
+        var result = await RetailApi.CreateSaleAsync(request);
+
+        if (result is null)
+        {
+            _message = "The sale could not be completed.";
+            _processing = false;
+            return;
+        }
+
+        _checkoutSucceeded = true;
+        _message = $"Sale completed. Receipt: {result.ReceiptNumber}";
+        _cart.Clear();
+        _amountReceived = 0m;
+        _processing = false;
+
+        await JavaScript.InvokeVoidAsync(
+            "console.log",
+            $"Completed sale {result.Id}");
+    }
+}

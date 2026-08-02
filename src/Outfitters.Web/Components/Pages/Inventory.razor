@@ -1,17 +1,72 @@
 @page "/inventory"
+@inject IRetailApiClient RetailApi
 
 <PageTitle>Inventory - OUTFITTERS</PageTitle>
 
 <div class="page-heading">
     <div>
-        <span class="eyebrow">Module</span>
+        <span class="eyebrow">Stock control</span>
         <h1>Inventory</h1>
-        <p>Manage products, variants, stock levels, receiving, and transfers.</p>
+        <p>Review stock levels across all stores.</p>
     </div>
 </div>
 
-<section class="page-card">
-    <div class="empty-state">
-        The Inventory workspace is ready for the next UI sprint.
+<ModuleToolbar
+    @bind-SearchText="_search"
+    Placeholder="Search inventory..."
+    PrimaryText="Stock Adjustment"
+    SecondaryText="Transfer Stock" />
+
+<section class="page-card table-card">
+    <div class="data-table">
+        <div class="table-row table-header">
+            <span>Product</span>
+            <span>Variant</span>
+            <span>Store</span>
+            <span>On Hand</span>
+            <span>Status</span>
+        </div>
+
+        @foreach (var item in FilteredItems)
+        {
+            <div class="table-row">
+                <span>@item.ProductName</span>
+                <span>@item.VariantName</span>
+                <span>@item.StoreName</span>
+                <strong>@item.QuantityOnHand.ToString("0.##")</strong>
+                <StatusBadge
+                    Text="@(item.IsLowStock ? "Low stock" : "Available")"
+                    Positive="@(!item.IsLowStock)" />
+            </div>
+        }
+
+        @if (!FilteredItems.Any())
+        {
+            <div class="empty-state">No inventory records found.</div>
+        }
     </div>
 </section>
+
+@code {
+    private IReadOnlyCollection<InventoryListItem> _items =
+        Array.Empty<InventoryListItem>();
+    private string _search = string.Empty;
+
+    private IEnumerable<InventoryListItem> FilteredItems =>
+        _items.Where(x =>
+            string.IsNullOrWhiteSpace(_search) ||
+            x.ProductName.Contains(
+                _search,
+                StringComparison.OrdinalIgnoreCase) ||
+            x.VariantName.Contains(
+                _search,
+                StringComparison.OrdinalIgnoreCase) ||
+            x.StoreName.Contains(
+                _search,
+                StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        _items = await RetailApi.GetInventoryAsync(null);
+    }
+}
