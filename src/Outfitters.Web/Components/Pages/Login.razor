@@ -1,50 +1,31 @@
 @page "/login"
+@attribute [AllowAnonymous]
 @inject IApiClient ApiClient
+@inject OrmsAuthenticationStateProvider AuthState
 @inject NavigationManager Navigation
 
 <PageTitle>Login - OUTFITTERS</PageTitle>
 
 <div class="login-page">
-    <div class="login-panel">
+    <section class="login-panel">
         <div class="brand login-brand">
             <div class="brand-mark">O</div>
-            <div>
-                <strong>OUTFITTERS</strong>
-                <span>Retail Management System</span>
-            </div>
+            <div><strong>OUTFITTERS</strong><span>Retail Management System</span></div>
         </div>
-
-        <h1>Welcome back</h1>
-        <p>Sign in to continue to your store dashboard.</p>
-
+        <h1>Sign in</h1>
+        <p>Enter your employee account to continue.</p>
         <EditForm Model="_request" OnValidSubmit="SubmitAsync">
             <DataAnnotationsValidator />
-
-            <label>
-                Email address
-                <InputText @bind-Value="_request.Email" />
-            </label>
-
-            <label>
-                Password
-                <InputText @bind-Value="_request.Password" type="password" />
-            </label>
-
-            <label class="checkbox-row">
-                <InputCheckbox @bind-Value="_request.RememberMe" />
-                Remember me
-            </label>
-
+            <label>Email address<InputText @bind-Value="_request.Email" /></label>
+            <label>Password<InputText @bind-Value="_request.Password" type="password" /></label>
+            <label class="checkbox-row"><InputCheckbox @bind-Value="_request.RememberMe" />Remember me</label>
             @if (!string.IsNullOrWhiteSpace(_error))
             {
                 <div class="error-message">@_error</div>
             }
-
-            <button class="primary-button" disabled="@_busy">
-                @(_busy ? "Signing in..." : "Sign in")
-            </button>
+            <button class="primary-button" disabled="@_busy">@(_busy ? "Signing in..." : "Sign in")</button>
         </EditForm>
-    </div>
+    </section>
 </div>
 
 @code {
@@ -56,16 +37,14 @@
     {
         _busy = true;
         _error = null;
-
         var result = await ApiClient.LoginAsync(_request);
-
         if (result is null || string.IsNullOrWhiteSpace(result.AccessToken))
         {
             _error = "The email or password is incorrect.";
             _busy = false;
             return;
         }
-
+        AuthState.SignIn(result.AccessToken);
         Navigation.NavigateTo("/");
     }
 }
