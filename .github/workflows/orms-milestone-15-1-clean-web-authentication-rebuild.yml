@@ -311,7 +311,7 @@ jobs:
 
           <div class="page-heading">
               <div><span class="eyebrow">Overview</span><h1>Store Dashboard</h1><p>Live retail performance and operational alerts.</p></div>
-              <button type="button" class="primary-button compact" @onclick="() => Navigation.NavigateTo(&quot;/pos&quot;)">New Sale</button>
+              <button type="button" class="primary-button compact" @onclick="NavigateToPos">New Sale</button>
           </div>
 
           @if (_loading)
@@ -337,6 +337,11 @@ jobs:
               {
                   _summary = await ApiClient.GetDashboardAsync();
                   _loading = false;
+              }
+
+              private void NavigateToPos()
+              {
+                  Navigation.NavigateTo("/pos");
               }
           }
           RAZOR
