@@ -56,6 +56,11 @@ public sealed class ApplicationDbContext
     public DbSet<AccountsReceivable> AccountsReceivables => Set<AccountsReceivable>();
     public DbSet<ExpenseRecord> ExpenseRecords => Set<ExpenseRecord>();
 
+              public DbSet<NotificationMessage> NotificationMessages => Set<NotificationMessage>();
+    public DbSet<IntegrationSetting> IntegrationSettings => Set<IntegrationSetting>();
+    public DbSet<ReceiptPrintJob> ReceiptPrintJobs => Set<ReceiptPrintJob>();
+    public DbSet<BarcodeAlias> BarcodeAliases => Set<BarcodeAlias>();
+
 protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
@@ -538,6 +543,44 @@ protected override void OnModelCreating(ModelBuilder builder)
                 .HasForeignKey(x => x.ExpenseAccountId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(x => x.CreatedByUser).WithMany()
                 .HasForeignKey(x => x.CreatedByUserId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<NotificationMessage>(entity =>
+        {
+            entity.HasIndex(x => new { x.Status, x.ScheduledAtUtc });
+            entity.Property(x => x.Recipient).HasMaxLength(500).IsRequired();
+            entity.Property(x => x.Subject).HasMaxLength(500).IsRequired();
+            entity.Property(x => x.TemplateCode).HasMaxLength(100);
+            entity.Property(x => x.ReferenceType).HasMaxLength(100);
+            entity.Property(x => x.ReferenceId).HasMaxLength(100);
+        });
+
+        builder.Entity<IntegrationSetting>(entity =>
+        {
+            entity.HasIndex(x => new { x.ProviderCode, x.SettingKey }).IsUnique();
+            entity.Property(x => x.ProviderCode).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.SettingKey).HasMaxLength(150).IsRequired();
+        });
+
+        builder.Entity<ReceiptPrintJob>(entity =>
+        {
+            entity.HasIndex(x => new { x.Status, x.CreatedAtUtc });
+            entity.Property(x => x.PrinterName).HasMaxLength(250).IsRequired();
+            entity.Property(x => x.PrinterProtocol).HasMaxLength(50).IsRequired();
+            entity.HasOne(x => x.Sale).WithMany()
+                .HasForeignKey(x => x.SaleId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.Store).WithMany()
+                .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<BarcodeAlias>(entity =>
+        {
+            entity.HasIndex(x => x.Barcode).IsUnique();
+            entity.HasIndex(x => new { x.ProductVariantId, x.IsPrimary });
+            entity.Property(x => x.Barcode).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.BarcodeType).HasMaxLength(30).IsRequired();
+            entity.HasOne(x => x.ProductVariant).WithMany()
+                .HasForeignKey(x => x.ProductVariantId).OnDelete(DeleteBehavior.Cascade);
         });
 }
 }

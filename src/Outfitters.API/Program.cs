@@ -1,3 +1,4 @@
+using Outfitters.Infrastructure.Integrations;
 using Microsoft.AspNetCore.Identity;
 using Outfitters.Domain.Entities;
 using Outfitters.Infrastructure;
@@ -10,6 +11,9 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddHealthChecks();
 builder.Services.AddInfrastructure(builder.Configuration);
+
+builder.Services.AddScoped<IBarcodeService, BarcodeService>();
+builder.Services.AddScoped<IReceiptFormatter, EscPosReceiptFormatter>();
 
 var app = builder.Build();
 
