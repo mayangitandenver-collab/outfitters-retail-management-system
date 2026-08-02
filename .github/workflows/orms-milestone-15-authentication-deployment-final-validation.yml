@@ -540,6 +540,43 @@ jobs:
           - Final user-acceptance testing uses sample data first.
           EOF
 
+      - name: Normalize Razor directives
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          razor_root = Path("src/Outfitters.Web")
+          directive_prefixes = (
+              "@page",
+              "@attribute",
+              "@inject",
+              "@using",
+              "@namespace",
+              "@inherits",
+              "@layout",
+              "@implements",
+              "@typeparam",
+              "@rendermode",
+          )
+
+          for path in razor_root.rglob("*.razor"):
+              lines = path.read_text().splitlines()
+              normalized = []
+
+              for line in lines:
+                  stripped = line.lstrip()
+
+                  if stripped.startswith(directive_prefixes):
+                      normalized.append(stripped)
+                  else:
+                      normalized.append(line)
+
+              path.write_text("\n".join(normalized) + "\n")
+          PY
+
       - name: Restore build and test
         shell: bash
         run: |
