@@ -1,0 +1,632 @@
+name: ORMS Milestone 15 - Authentication Deployment and Final Validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  milestone15:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Write authentication services
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p src/Outfitters.Web/Authentication
+          mkdir -p src/Outfitters.Web/Components/Shared
+          mkdir -p deployment
+
+          cat > src/Outfitters.Web/Authentication/AuthSession.cs <<'EOF'
+          using System.IdentityModel.Tokens.Jwt;
+          using System.Security.Claims;
+          using Microsoft.AspNetCore.Components.Authorization;
+
+          namespace Outfitters.Web.Authentication;
+
+          public sealed class AuthSession
+          {
+              private string? _accessToken;
+              private ClaimsPrincipal _principal =
+                  new(new ClaimsIdentity());
+
+              public string? AccessToken => _accessToken;
+              public ClaimsPrincipal Principal => _principal;
+
+              public void SetToken(string token)
+              {
+                  _accessToken = token;
+                  _principal = CreatePrincipal(token);
+              }
+
+              public void Clear()
+              {
+                  _accessToken = null;
+                  _principal = new ClaimsPrincipal(new ClaimsIdentity());
+              }
+
+              private static ClaimsPrincipal CreatePrincipal(string token)
+              {
+                  try
+                  {
+                      var jwt = new JwtSecurityTokenHandler().ReadJwtToken(token);
+                      var claims = jwt.Claims.ToList();
+
+                      foreach (var role in claims
+                          .Where(x => x.Type is "role" or "roles")
+                          .Select(x => x.Value)
+                          .ToArray())
+                      {
+                          if (claims.All(x =>
+                              x.Type != ClaimTypes.Role ||
+                              x.Value != role))
+                          {
+                              claims.Add(new Claim(ClaimTypes.Role, role));
+                          }
+                      }
+
+                      return new ClaimsPrincipal(
+                          new ClaimsIdentity(
+                              claims,
+                              "Bearer",
+                              ClaimTypes.Name,
+                              ClaimTypes.Role));
+                  }
+                  catch
+                  {
+                      return new ClaimsPrincipal(new ClaimsIdentity());
+                  }
+              }
+          }
+
+          public sealed class OrmsAuthenticationStateProvider
+              : AuthenticationStateProvider
+          {
+              private readonly AuthSession _session;
+
+              public OrmsAuthenticationStateProvider(AuthSession session)
+              {
+                  _session = session;
+              }
+
+              public override Task<AuthenticationState>
+                  GetAuthenticationStateAsync() =>
+                  Task.FromResult(
+                      new AuthenticationState(_session.Principal));
+
+              public void SignIn(string token)
+              {
+                  _session.SetToken(token);
+                  NotifyAuthenticationStateChanged(
+                      GetAuthenticationStateAsync());
+              }
+
+              public void SignOut()
+              {
+                  _session.Clear();
+                  NotifyAuthenticationStateChanged(
+                      GetAuthenticationStateAsync());
+              }
+          }
+          EOF
+
+          cat > src/Outfitters.Web/Authentication/BearerTokenHandler.cs <<'EOF'
+          using System.Net.Http.Headers;
+
+          namespace Outfitters.Web.Authentication;
+
+          public sealed class BearerTokenHandler : DelegatingHandler
+          {
+              private readonly AuthSession _session;
+
+              public BearerTokenHandler(AuthSession session)
+              {
+                  _session = session;
+              }
+
+              protected override Task<HttpResponseMessage> SendAsync(
+                  HttpRequestMessage request,
+                  CancellationToken cancellationToken)
+              {
+                  if (!string.IsNullOrWhiteSpace(_session.AccessToken))
+                  {
+                      request.Headers.Authorization =
+                          new AuthenticationHeaderValue(
+                              "Bearer",
+                              _session.AccessToken);
+                  }
+
+                  return base.SendAsync(request, cancellationToken);
+              }
+          }
+          EOF
+
+      - name: Configure authentication and API clients
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/Outfitters.Web/Program.cs")
+          text = path.read_text()
+
+          if "using Outfitters.Web.Authentication;" not in text:
+              text = "using Outfitters.Web.Authentication;\n" + text
+
+          marker = "var apiBaseUrl ="
+          services = (
+              "builder.Services.AddAuthorizationCore();\n"
+              "builder.Services.AddScoped<AuthSession>();\n"
+              "builder.Services.AddScoped<BearerTokenHandler>();\n"
+              "builder.Services.AddScoped<"
+              "Microsoft.AspNetCore.Components.Authorization.AuthenticationStateProvider, "
+              "OrmsAuthenticationStateProvider>();\n\n"
+          )
+
+          if "AddScoped<AuthSession>" not in text:
+              index = text.find(marker)
+              if index == -1:
+                  raise SystemExit("API configuration marker not found")
+              text = text[:index] + services + text[index:]
+
+          text = text.replace(
+              "          });\n\nvar app = builder.Build();",
+              "          })\n"
+              "          .AddHttpMessageHandler<BearerTokenHandler>();\n\n"
+              "var app = builder.Build();",
+              1
+          )
+
+          retail_marker = (
+              "builder.Services.AddHttpClient<IRetailApiClient, RetailApiClient>"
+          )
+          retail_index = text.find(retail_marker)
+          if retail_index != -1:
+              end = text.find("          });", retail_index)
+              if end != -1:
+                  end += len("          });")
+                  block = text[retail_index:end]
+                  if "AddHttpMessageHandler" not in block:
+                      replacement = block[:-2] + (
+                          ")\n"
+                          "          .AddHttpMessageHandler<BearerTokenHandler>();"
+                      )
+                      text = text[:retail_index] + replacement + text[end:]
+
+          if 'app.MapGet("/health"' not in text:
+              marker = "app.MapRazorComponents<App>()"
+              index = text.find(marker)
+              if index == -1:
+                  raise SystemExit("Razor mapping marker not found")
+              health = (
+                  'app.MapGet("/health", () => Results.Ok(new\n'
+                  "{\n"
+                  '    Status = "Healthy",\n'
+                  '    Service = "Outfitters.Web",\n'
+                  "    UtcTime = DateTime.UtcNow\n"
+                  "}));\n\n"
+              )
+              text = text[:index] + health + text[index:]
+
+          path.write_text(text)
+          PY
+
+      - name: Write protected routing and user menu
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Components/Shared/RedirectToLogin.razor <<'EOF'
+          @namespace Outfitters.Web.Components.Shared
+          @inject NavigationManager Navigation
+
+          <p>Redirecting to sign in...</p>
+
+          @code {
+              protected override void OnAfterRender(bool firstRender)
+              {
+                  if (firstRender)
+                  {
+                      Navigation.NavigateTo(
+                          "/login",
+                          replace: true);
+                  }
+              }
+          }
+          EOF
+
+          cat > src/Outfitters.Web/Components/Shared/UserMenu.razor <<'EOF'
+          @namespace Outfitters.Web.Components.Shared
+          @inject OrmsAuthenticationStateProvider AuthState
+          @inject NavigationManager Navigation
+
+          <AuthorizeView>
+              <Authorized Context="authContext">
+                  <div class="user-menu">
+                      <span class="user-chip">
+                          @(authContext.User.Identity?.Name ?? "Employee")
+                      </span>
+                      <button
+                          type="button"
+                          class="ghost-button"
+                          @onclick="Logout">
+                          Sign out
+                      </button>
+                  </div>
+              </Authorized>
+          </AuthorizeView>
+
+          @code {
+              private void Logout()
+              {
+                  AuthState.SignOut();
+                  Navigation.NavigateTo(
+                      "/login",
+                      replace: true);
+              }
+          }
+          EOF
+
+          cat > src/Outfitters.Web/Components/Routes.razor <<'EOF'
+          @using Microsoft.AspNetCore.Components.Authorization
+          @using Outfitters.Web.Components.Shared
+
+          <CascadingAuthenticationState>
+              <Router AppAssembly="typeof(Program).Assembly">
+                  <Found Context="routeData">
+                      <AuthorizeRouteView
+                          RouteData="routeData"
+                          DefaultLayout="typeof(Layout.MainLayout)">
+                          <NotAuthorized>
+                              <RedirectToLogin />
+                          </NotAuthorized>
+                      </AuthorizeRouteView>
+                      <FocusOnNavigate
+                          RouteData="routeData"
+                          Selector="h1" />
+                  </Found>
+
+                  <NotFound>
+                      <LayoutView Layout="typeof(Layout.MainLayout)">
+                          <div class="page-card">
+                              <h1>Page not found</h1>
+                              <p>The requested ORMS page does not exist.</p>
+                          </div>
+                      </LayoutView>
+                  </NotFound>
+              </Router>
+          </CascadingAuthenticationState>
+          EOF
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          imports = Path("src/Outfitters.Web/Components/_Imports.razor")
+          text = imports.read_text()
+
+          additions = [
+              "@using Microsoft.AspNetCore.Authorization\n",
+              "@using Microsoft.AspNetCore.Components.Authorization\n",
+              "@using Outfitters.Web.Authentication\n",
+              "@using Outfitters.Web.Components.Shared\n",
+          ]
+
+          for addition in additions:
+              if addition not in text:
+                  text += addition
+
+          imports.write_text(text)
+
+          layout = Path(
+              "src/Outfitters.Web/Components/Layout/MainLayout.razor"
+          )
+          layout_text = layout.read_text()
+          layout_text = layout_text.replace(
+              '<div class="user-chip">Administrator</div>',
+              '<UserMenu />'
+          )
+          layout.write_text(layout_text)
+          PY
+
+      - name: Integrate login and protect pages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          login = Path(
+              "src/Outfitters.Web/Components/Pages/Login.razor"
+          )
+          text = login.read_text()
+
+          if "@attribute [AllowAnonymous]" not in text:
+              text = text.replace(
+                  '@page "/login"',
+                  '@page "/login"\n@attribute [AllowAnonymous]'
+              )
+
+          if "@inject OrmsAuthenticationStateProvider AuthState" not in text:
+              text = text.replace(
+                  "@inject NavigationManager Navigation",
+                  "@inject NavigationManager Navigation\n"
+                  "@inject OrmsAuthenticationStateProvider AuthState"
+              )
+
+          old = '                  Navigation.NavigateTo("/");'
+          new = (
+              "                  AuthState.SignIn(result.AccessToken);\n"
+              '                  Navigation.NavigateTo("/");'
+          )
+          text = text.replace(old, new)
+          login.write_text(text)
+
+          pages = Path("src/Outfitters.Web/Components/Pages")
+          for page in pages.glob("*.razor"):
+              if page.name in {"Login.razor", "Error.razor"}:
+                  continue
+
+              page_text = page.read_text()
+              if "@attribute [Authorize]" in page_text:
+                  continue
+
+              lines = page_text.splitlines()
+              insert_at = 0
+              while (
+                  insert_at < len(lines)
+                  and (
+                      lines[insert_at].startswith("@page")
+                      or not lines[insert_at].strip()
+                  )
+              ):
+                  insert_at += 1
+
+              lines.insert(insert_at, "@attribute [Authorize]")
+              page.write_text("\n".join(lines) + "\n")
+          PY
+
+          cat >> src/Outfitters.Web/wwwroot/css/site.css <<'EOF'
+
+          .user-menu {
+              display: flex;
+              align-items: center;
+              gap: 10px;
+          }
+
+          button:disabled {
+              cursor: not-allowed;
+              opacity: 0.55;
+          }
+
+          @media (max-width: 620px) {
+              .user-menu .user-chip {
+                  display: none;
+              }
+          }
+          EOF
+
+      - name: Write full production deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > Dockerfile.web <<'EOF'
+          FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+          WORKDIR /src
+          COPY . .
+          RUN dotnet restore src/Outfitters.Web/Outfitters.Web.csproj
+          RUN dotnet publish src/Outfitters.Web/Outfitters.Web.csproj \
+              --configuration Release \
+              --output /app/publish \
+              --no-restore
+
+          FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS final
+          WORKDIR /app
+          EXPOSE 8080
+          ENV ASPNETCORE_URLS=http://+:8080
+          COPY --from=build /app/publish .
+          ENTRYPOINT ["dotnet", "Outfitters.Web.dll"]
+          EOF
+
+          cat > docker-compose.full.production.yml <<'EOF'
+          services:
+            database:
+              image: postgres:17-alpine
+              restart: unless-stopped
+              environment:
+                POSTGRES_DB: outfitters
+                POSTGRES_USER: outfitters
+                POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+              volumes:
+                - outfitters_postgres_data:/var/lib/postgresql/data
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U outfitters -d outfitters"]
+                interval: 10s
+                timeout: 5s
+                retries: 10
+
+            api:
+              build:
+                context: .
+                dockerfile: Dockerfile
+              restart: unless-stopped
+              depends_on:
+                database:
+                  condition: service_healthy
+              environment:
+                ASPNETCORE_ENVIRONMENT: Production
+                ASPNETCORE_URLS: http://+:8080
+                ConnectionStrings__DefaultConnection: Host=database;Port=5432;Database=outfitters;Username=outfitters;Password=${POSTGRES_PASSWORD}
+                Jwt__Key: ${JWT_KEY}
+                Jwt__Issuer: ${JWT_ISSUER:-Outfitters}
+                Jwt__Audience: ${JWT_AUDIENCE:-OutfittersClients}
+              ports:
+                - "${ORMS_API_PORT:-8080}:8080"
+
+            web:
+              build:
+                context: .
+                dockerfile: Dockerfile.web
+              restart: unless-stopped
+              depends_on:
+                - api
+              environment:
+                ASPNETCORE_ENVIRONMENT: Production
+                ASPNETCORE_URLS: http://+:8080
+                Api__BaseUrl: http://api:8080
+              ports:
+                - "${ORMS_WEB_PORT:-8081}:8080"
+
+          volumes:
+            outfitters_postgres_data:
+          EOF
+
+          cat > .env.full.production.example <<'EOF'
+          POSTGRES_PASSWORD=replace-with-a-strong-database-password
+          JWT_KEY=replace-with-a-random-secret-at-least-32-characters-long
+          JWT_ISSUER=Outfitters
+          JWT_AUDIENCE=OutfittersClients
+          ORMS_API_PORT=8080
+          ORMS_WEB_PORT=8081
+          EOF
+
+          cat > deployment/FINAL-VALIDATION-CHECKLIST.md <<'EOF'
+          # ORMS Final Validation Checklist
+
+          ## Authentication
+          - Administrator can sign in and sign out.
+          - Incorrect credentials are rejected.
+          - Anonymous users are redirected to login.
+          - Role restrictions are verified.
+
+          ## Point of sale
+          - Barcode lookup finds the correct variant.
+          - Cart totals and change calculations are correct.
+          - A completed sale reduces stock.
+          - Receipt printing is tested with the Xprinter.
+
+          ## Inventory and stores
+          - Inventory is separated by store.
+          - Stock transfers update both stores.
+          - Low-stock alerts are correct.
+          - Users only see permitted stores.
+
+          ## Reliability
+          - API and web health endpoints respond.
+          - PostgreSQL backup completes.
+          - A backup restores into a separate test database.
+          - Desktop, tablet, and phone layouts are tested.
+          - Final user-acceptance testing uses sample data first.
+          EOF
+
+      - name: Restore build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          dotnet restore OutfittersRetailManagementSystem.sln
+          dotnet build OutfittersRetailManagementSystem.sln \
+            --configuration Release \
+            --no-restore
+          dotnet test OutfittersRetailManagementSystem.sln \
+            --configuration Release \
+            --no-build
+
+      - name: Publish final release candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf artifacts
+          mkdir -p artifacts/api
+          mkdir -p artifacts/web
+          mkdir -p artifacts/package
+
+          dotnet publish src/Outfitters.API/Outfitters.API.csproj \
+            --configuration Release \
+            --output artifacts/api \
+            --no-build
+
+          dotnet publish src/Outfitters.Web/Outfitters.Web.csproj \
+            --configuration Release \
+            --output artifacts/web \
+            --no-build
+
+          cp -r artifacts/api artifacts/package/
+          cp -r artifacts/web artifacts/package/
+          cp Dockerfile artifacts/package/
+          cp Dockerfile.web artifacts/package/
+          cp docker-compose.full.production.yml artifacts/package/
+          cp .env.full.production.example artifacts/package/
+          cp deployment/PRODUCTION-DEPLOYMENT.md artifacts/package/
+          cp deployment/FINAL-VALIDATION-CHECKLIST.md artifacts/package/
+          cp RELEASE_NOTES_RC1.md artifacts/package/
+
+          (
+            cd artifacts/package
+            zip -r ../outfitters-orms-v1-release-candidate.zip .
+          )
+
+      - name: Upload final release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: outfitters-orms-v1-release-candidate
+          path: artifacts/outfitters-orms-v1-release-candidate.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Commit milestone 15
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            src/Outfitters.Web \
+            Dockerfile.web \
+            docker-compose.full.production.yml \
+            .env.full.production.example \
+            deployment/FINAL-VALIDATION-CHECKLIST.md
+
+          if git diff --cached --quiet
+          then
+            echo "Milestone 15 files are already committed; nothing to push."
+            exit 0
+          fi
+
+          git commit -m "Milestone 15 - Add authentication deployment and final validation"
+
+          for attempt in 1 2 3
+          do
+            git fetch origin main
+            git rebase origin/main
+
+            if git push origin HEAD:main
+            then
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]
+            then
+              sleep 5
+            fi
+          done
+
+          echo "Unable to push Milestone 15 after three attempts."
+          exit 1
