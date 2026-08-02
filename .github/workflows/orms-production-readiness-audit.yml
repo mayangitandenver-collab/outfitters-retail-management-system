@@ -81,12 +81,15 @@ jobs:
             local title="$1"
             local pattern="$2"
             local count
-            count=$(grep -RIl \
-              --include='*.cs' \
-              --include='*.razor' \
-              --include='*.json' \
-              --include='*.csproj' \
-              "$pattern" src 2>/dev/null | wc -l)
+            count=$(
+              grep -RIl \
+                --include='*.cs' \
+                --include='*.razor' \
+                --include='*.json' \
+                --include='*.csproj' \
+                "$pattern" src 2>/dev/null || true
+            )
+            count=$(printf '%s\n' "$count" | sed '/^$/d' | wc -l)
 
             if [ "$count" -gt 0 ]; then
               echo "- [x] ${title}: evidence found in ${count} file(s)" >> "$REPORT"
@@ -115,7 +118,7 @@ jobs:
             echo "## Deployment checks"
           } >> "$REPORT"
 
-          if find . -iname 'docker-compose*.yml' -o -iname 'docker-compose*.yaml' \
+          if find . \( -iname 'docker-compose*.yml' -o -iname 'docker-compose*.yaml' \) \
             | grep -q .; then
             echo "- [x] Docker Compose configuration found" >> "$REPORT"
           else
