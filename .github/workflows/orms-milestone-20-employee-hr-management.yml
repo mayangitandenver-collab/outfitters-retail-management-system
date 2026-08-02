@@ -1,0 +1,889 @@
+name: ORMS Milestone 20 - Employee and HR Management
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  milestone20:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Add employee and HR models
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p src/Outfitters.Web/Models
+          mkdir -p src/Outfitters.Web/Services
+          mkdir -p src/Outfitters.Web/Components/Pages
+
+          cat > src/Outfitters.Web/Models/HrModels.cs <<'EOF'
+          namespace Outfitters.Web.Models;
+
+          public sealed class HrDashboardSummary
+          {
+              public int ActiveEmployeeCount { get; set; }
+              public int PresentTodayCount { get; set; }
+              public int AbsentTodayCount { get; set; }
+              public int OnLeaveTodayCount { get; set; }
+              public int LateTodayCount { get; set; }
+              public decimal CurrentMonthCommission { get; set; }
+
+              public IReadOnlyCollection<EmployeePerformanceItem> TopEmployees { get; set; } =
+                  Array.Empty<EmployeePerformanceItem>();
+
+              public IReadOnlyCollection<AttendanceAlertItem> AttendanceAlerts { get; set; } =
+                  Array.Empty<AttendanceAlertItem>();
+          }
+
+          public sealed class EmployeePerformanceItem
+          {
+              public Guid EmployeeId { get; set; }
+              public string EmployeeNumber { get; set; } = string.Empty;
+              public string EmployeeName { get; set; } = string.Empty;
+              public string Position { get; set; } = string.Empty;
+              public string StoreName { get; set; } = string.Empty;
+              public decimal SalesAmount { get; set; }
+              public int TransactionCount { get; set; }
+              public decimal CommissionAmount { get; set; }
+              public decimal AverageTransactionValue { get; set; }
+          }
+
+          public sealed class AttendanceAlertItem
+          {
+              public Guid EmployeeId { get; set; }
+              public string EmployeeName { get; set; } = string.Empty;
+              public string StoreName { get; set; } = string.Empty;
+              public string AlertType { get; set; } = string.Empty;
+              public DateTime OccurredAtUtc { get; set; }
+              public string Notes { get; set; } = string.Empty;
+          }
+
+          public sealed class ClockEntryRequest
+          {
+              public Guid EmployeeId { get; set; }
+              public Guid StoreId { get; set; }
+              public string Pin { get; set; } = string.Empty;
+              public string EntryType { get; set; } = "ClockIn";
+          }
+
+          public sealed class ShiftAssignmentRequest
+          {
+              public Guid EmployeeId { get; set; }
+              public Guid StoreId { get; set; }
+              public DateTime StartsAtUtc { get; set; }
+              public DateTime EndsAtUtc { get; set; }
+              public string Notes { get; set; } = string.Empty;
+          }
+
+          public sealed class LeaveRequestModel
+          {
+              public Guid EmployeeId { get; set; }
+              public string LeaveType { get; set; } = "Vacation";
+              public DateTime StartsOnUtc { get; set; }
+              public DateTime EndsOnUtc { get; set; }
+              public string Reason { get; set; } = string.Empty;
+          }
+
+          public sealed class PayrollExportRequest
+          {
+              public DateTime PeriodStartUtc { get; set; }
+              public DateTime PeriodEndUtc { get; set; }
+              public Guid? StoreId { get; set; }
+          }
+          EOF
+
+      - name: Add HR API client
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Services/HrApiClient.cs <<'EOF'
+          using System.Net.Http.Json;
+          using Outfitters.Web.Models;
+
+          namespace Outfitters.Web.Services;
+
+          public interface IHrApiClient
+          {
+              Task<HrDashboardSummary> GetDashboardAsync(
+                  CancellationToken cancellationToken = default);
+
+              Task<bool> PostClockEntryAsync(
+                  ClockEntryRequest request,
+                  CancellationToken cancellationToken = default);
+
+              Task<bool> CreateShiftAsync(
+                  ShiftAssignmentRequest request,
+                  CancellationToken cancellationToken = default);
+
+              Task<bool> CreateLeaveRequestAsync(
+                  LeaveRequestModel request,
+                  CancellationToken cancellationToken = default);
+
+              Task<byte[]?> ExportPayrollAsync(
+                  PayrollExportRequest request,
+                  CancellationToken cancellationToken = default);
+          }
+
+          public sealed class HrApiClient : IHrApiClient
+          {
+              private readonly HttpClient _httpClient;
+
+              public HrApiClient(HttpClient httpClient)
+              {
+                  _httpClient = httpClient;
+              }
+
+              public async Task<HrDashboardSummary> GetDashboardAsync(
+                  CancellationToken cancellationToken = default)
+              {
+                  try
+                  {
+                      return await _httpClient
+                          .GetFromJsonAsync<HrDashboardSummary>(
+                              "/api/hr/dashboard",
+                              cancellationToken)
+                          ?? new HrDashboardSummary();
+                  }
+                  catch
+                  {
+                      return new HrDashboardSummary();
+                  }
+              }
+
+              public async Task<bool> PostClockEntryAsync(
+                  ClockEntryRequest request,
+                  CancellationToken cancellationToken = default)
+              {
+                  using var response = await _httpClient.PostAsJsonAsync(
+                      "/api/hr/attendance/clock",
+                      request,
+                      cancellationToken);
+
+                  return response.IsSuccessStatusCode;
+              }
+
+              public async Task<bool> CreateShiftAsync(
+                  ShiftAssignmentRequest request,
+                  CancellationToken cancellationToken = default)
+              {
+                  using var response = await _httpClient.PostAsJsonAsync(
+                      "/api/hr/shifts",
+                      request,
+                      cancellationToken);
+
+                  return response.IsSuccessStatusCode;
+              }
+
+              public async Task<bool> CreateLeaveRequestAsync(
+                  LeaveRequestModel request,
+                  CancellationToken cancellationToken = default)
+              {
+                  using var response = await _httpClient.PostAsJsonAsync(
+                      "/api/hr/leave-requests",
+                      request,
+                      cancellationToken);
+
+                  return response.IsSuccessStatusCode;
+              }
+
+              public async Task<byte[]?> ExportPayrollAsync(
+                  PayrollExportRequest request,
+                  CancellationToken cancellationToken = default)
+              {
+                  try
+                  {
+                      using var response = await _httpClient.PostAsJsonAsync(
+                          "/api/hr/payroll/export",
+                          request,
+                          cancellationToken);
+
+                      if (!response.IsSuccessStatusCode)
+                      {
+                          return null;
+                      }
+
+                      return await response.Content.ReadAsByteArrayAsync(
+                          cancellationToken);
+                  }
+                  catch
+                  {
+                      return null;
+                  }
+              }
+          }
+          EOF
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/Outfitters.Web/Program.cs")
+          text = path.read_text()
+
+          registration = """builder.Services
+              .AddHttpClient<IHrApiClient, HrApiClient>(client =>
+              {
+                  client.BaseAddress = new Uri(apiBaseUrl);
+                  client.Timeout = TimeSpan.FromSeconds(30);
+              })
+              .AddHttpMessageHandler<BearerTokenHandler>();
+
+          """
+
+          if "IHrApiClient" not in text:
+              marker = "var app = builder.Build();"
+              index = text.find(marker)
+
+              if index == -1:
+                  raise SystemExit("Program.cs application marker not found")
+
+              text = text[:index] + registration + text[index:]
+
+          path.write_text(text)
+          PY
+
+      - name: Add HR dashboard
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Components/Pages/HrDashboard.razor <<'EOF'
+          @page "/hr"
+          @attribute [Authorize(Roles = "Administrator,Manager")]
+          @inject IHrApiClient HrApi
+
+          <PageTitle>Employee and HR Management - OUTFITTERS</PageTitle>
+
+          <div class="page-heading">
+              <div>
+                  <span class="eyebrow">People operations</span>
+                  <h1>Employee and HR Management</h1>
+                  <p>Monitor attendance, employee performance, commissions, and staffing alerts.</p>
+              </div>
+
+              <button
+                  type="button"
+                  class="primary-button compact"
+                  @onclick="LoadAsync">
+                  Refresh
+              </button>
+          </div>
+
+          <div class="metric-grid">
+              <article class="metric-card">
+                  <span>Active Employees</span>
+                  <strong>@_summary.ActiveEmployeeCount</strong>
+              </article>
+
+              <article class="metric-card">
+                  <span>Present Today</span>
+                  <strong>@_summary.PresentTodayCount</strong>
+              </article>
+
+              <article class="metric-card alert-card">
+                  <span>Absent Today</span>
+                  <strong>@_summary.AbsentTodayCount</strong>
+              </article>
+
+              <article class="metric-card">
+                  <span>On Leave</span>
+                  <strong>@_summary.OnLeaveTodayCount</strong>
+              </article>
+
+              <article class="metric-card alert-card">
+                  <span>Late Today</span>
+                  <strong>@_summary.LateTodayCount</strong>
+              </article>
+
+              <article class="metric-card">
+                  <span>Monthly Commission</span>
+                  <strong>@_summary.CurrentMonthCommission.ToString("C")</strong>
+              </article>
+          </div>
+
+          <section class="page-card hr-section">
+              <div class="section-heading">
+                  <h2>Top Employee Performance</h2>
+              </div>
+
+              <div class="data-table">
+                  <div class="table-row table-header employee-performance-table">
+                      <span>Employee</span>
+                      <span>Store</span>
+                      <span>Position</span>
+                      <span>Sales</span>
+                      <span>Transactions</span>
+                      <span>Average Sale</span>
+                      <span>Commission</span>
+                  </div>
+
+                  @foreach (var item in _summary.TopEmployees)
+                  {
+                      <div class="table-row employee-performance-table">
+                          <span>
+                              <strong>@item.EmployeeName</strong>
+                              <small>@item.EmployeeNumber</small>
+                          </span>
+                          <span>@item.StoreName</span>
+                          <span>@item.Position</span>
+                          <span>@item.SalesAmount.ToString("C")</span>
+                          <span>@item.TransactionCount</span>
+                          <span>@item.AverageTransactionValue.ToString("C")</span>
+                          <span>@item.CommissionAmount.ToString("C")</span>
+                      </div>
+                  }
+
+                  @if (_summary.TopEmployees.Count == 0)
+                  {
+                      <div class="empty-state">No employee performance data is available.</div>
+                  }
+              </div>
+          </section>
+
+          <section class="page-card hr-section">
+              <div class="section-heading">
+                  <h2>Attendance Alerts</h2>
+              </div>
+
+              <div class="data-table">
+                  <div class="table-row table-header attendance-alert-table">
+                      <span>Employee</span>
+                      <span>Store</span>
+                      <span>Alert</span>
+                      <span>Time</span>
+                      <span>Notes</span>
+                  </div>
+
+                  @foreach (var item in _summary.AttendanceAlerts)
+                  {
+                      <div class="table-row attendance-alert-table">
+                          <strong>@item.EmployeeName</strong>
+                          <span>@item.StoreName</span>
+                          <StatusBadge
+                              Text="@item.AlertType"
+                              Positive="@(item.AlertType == "Resolved")" />
+                          <span>@item.OccurredAtUtc.ToLocalTime().ToString("MMM d, HH:mm")</span>
+                          <span>@item.Notes</span>
+                      </div>
+                  }
+
+                  @if (_summary.AttendanceAlerts.Count == 0)
+                  {
+                      <div class="empty-state">No attendance alerts are available.</div>
+                  }
+              </div>
+          </section>
+
+          @code {
+              private HrDashboardSummary _summary = new();
+
+              protected override async Task OnInitializedAsync()
+              {
+                  await LoadAsync();
+              }
+
+              private async Task LoadAsync()
+              {
+                  _summary = await HrApi.GetDashboardAsync();
+              }
+          }
+          EOF
+
+      - name: Add attendance clock page
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Components/Pages/AttendanceClock.razor <<'EOF'
+          @page "/hr/attendance"
+          @attribute [Authorize]
+          @inject IHrApiClient HrApi
+
+          <PageTitle>Attendance Clock - OUTFITTERS</PageTitle>
+
+          <div class="page-heading">
+              <div>
+                  <span class="eyebrow">Attendance</span>
+                  <h1>Clock In and Out</h1>
+                  <p>Record employee attendance using a secure employee PIN.</p>
+              </div>
+          </div>
+
+          <section class="page-card hr-form">
+              <div class="form-grid">
+                  <label>
+                      Employee ID
+                      <input @bind="_employeeIdText" />
+                  </label>
+
+                  <label>
+                      Store ID
+                      <input @bind="_storeIdText" />
+                  </label>
+              </div>
+
+              <label>
+                  Employee PIN
+                  <input type="password" @bind="_pin" />
+              </label>
+
+              <label>
+                  Entry Type
+                  <select @bind="_entryType">
+                      <option value="ClockIn">Clock In</option>
+                      <option value="ClockOut">Clock Out</option>
+                      <option value="BreakStart">Start Break</option>
+                      <option value="BreakEnd">End Break</option>
+                  </select>
+              </label>
+
+              @if (!string.IsNullOrWhiteSpace(_message))
+              {
+                  <div class="@(_success ? "success-message" : "error-message")">
+                      @_message
+                  </div>
+              }
+
+              <button
+                  type="button"
+                  class="primary-button"
+                  disabled="@_submitting"
+                  @onclick="SubmitAsync">
+                  @(_submitting ? "Saving..." : "Record Attendance")
+              </button>
+          </section>
+
+          @code {
+              private string _employeeIdText = string.Empty;
+              private string _storeIdText = string.Empty;
+              private string _pin = string.Empty;
+              private string _entryType = "ClockIn";
+              private string? _message;
+              private bool _success;
+              private bool _submitting;
+
+              private async Task SubmitAsync()
+              {
+                  _message = null;
+                  _success = false;
+
+                  if (!Guid.TryParse(_employeeIdText, out var employeeId) ||
+                      !Guid.TryParse(_storeIdText, out var storeId))
+                  {
+                      _message = "Enter valid employee and store IDs.";
+                      return;
+                  }
+
+                  _submitting = true;
+
+                  _success = await HrApi.PostClockEntryAsync(
+                      new ClockEntryRequest
+                      {
+                          EmployeeId = employeeId,
+                          StoreId = storeId,
+                          Pin = _pin,
+                          EntryType = _entryType
+                      });
+
+                  _submitting = false;
+                  _message = _success
+                      ? "Attendance entry recorded."
+                      : "The attendance entry could not be recorded.";
+              }
+          }
+          EOF
+
+      - name: Add shift and leave management page
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > src/Outfitters.Web/Components/Pages/HrScheduling.razor <<'EOF'
+          @page "/hr/scheduling"
+          @attribute [Authorize(Roles = "Administrator,Manager")]
+          @inject IHrApiClient HrApi
+
+          <PageTitle>HR Scheduling - OUTFITTERS</PageTitle>
+
+          <div class="page-heading">
+              <div>
+                  <span class="eyebrow">Workforce planning</span>
+                  <h1>Shifts and Leave</h1>
+                  <p>Create employee shifts and submit leave requests.</p>
+              </div>
+          </div>
+
+          <div class="hr-tools-grid">
+              <section class="page-card hr-form">
+                  <h2>Create Shift</h2>
+
+                  <label>
+                      Employee ID
+                      <input @bind="_shiftEmployeeIdText" />
+                  </label>
+
+                  <label>
+                      Store ID
+                      <input @bind="_shiftStoreIdText" />
+                  </label>
+
+                  <label>
+                      Shift Start
+                      <input type="datetime-local" @bind="_shiftStartsAt" />
+                  </label>
+
+                  <label>
+                      Shift End
+                      <input type="datetime-local" @bind="_shiftEndsAt" />
+                  </label>
+
+                  <label>
+                      Notes
+                      <textarea rows="3" @bind="_shiftNotes"></textarea>
+                  </label>
+
+                  <button
+                      type="button"
+                      class="primary-button"
+                      @onclick="CreateShiftAsync">
+                      Create Shift
+                  </button>
+              </section>
+
+              <section class="page-card hr-form">
+                  <h2>Create Leave Request</h2>
+
+                  <label>
+                      Employee ID
+                      <input @bind="_leaveEmployeeIdText" />
+                  </label>
+
+                  <label>
+                      Leave Type
+                      <select @bind="_leaveType">
+                          <option>Vacation</option>
+                          <option>Sick</option>
+                          <option>Emergency</option>
+                          <option>Maternity</option>
+                          <option>Paternity</option>
+                          <option>Unpaid</option>
+                      </select>
+                  </label>
+
+                  <label>
+                      Start Date
+                      <InputDate @bind-Value="_leaveStartsOn" />
+                  </label>
+
+                  <label>
+                      End Date
+                      <InputDate @bind-Value="_leaveEndsOn" />
+                  </label>
+
+                  <label>
+                      Reason
+                      <textarea rows="3" @bind="_leaveReason"></textarea>
+                  </label>
+
+                  <button
+                      type="button"
+                      class="primary-button"
+                      @onclick="CreateLeaveRequestAsync">
+                      Submit Leave Request
+                  </button>
+              </section>
+          </div>
+
+          @if (!string.IsNullOrWhiteSpace(_message))
+          {
+              <div class="@(_success ? "success-message" : "error-message")">
+                  @_message
+              </div>
+          }
+
+          @code {
+              private string _shiftEmployeeIdText = string.Empty;
+              private string _shiftStoreIdText = string.Empty;
+              private DateTime _shiftStartsAt = DateTime.Today.AddHours(9);
+              private DateTime _shiftEndsAt = DateTime.Today.AddHours(18);
+              private string _shiftNotes = string.Empty;
+
+              private string _leaveEmployeeIdText = string.Empty;
+              private string _leaveType = "Vacation";
+              private DateTime _leaveStartsOn = DateTime.Today.AddDays(7);
+              private DateTime _leaveEndsOn = DateTime.Today.AddDays(7);
+              private string _leaveReason = string.Empty;
+
+              private string? _message;
+              private bool _success;
+
+              private async Task CreateShiftAsync()
+              {
+                  if (!Guid.TryParse(
+                      _shiftEmployeeIdText,
+                      out var employeeId) ||
+                      !Guid.TryParse(
+                          _shiftStoreIdText,
+                          out var storeId))
+                  {
+                      SetMessage(false, "Enter valid employee and store IDs.");
+                      return;
+                  }
+
+                  if (_shiftEndsAt <= _shiftStartsAt)
+                  {
+                      SetMessage(false, "Shift end must be after shift start.");
+                      return;
+                  }
+
+                  var success = await HrApi.CreateShiftAsync(
+                      new ShiftAssignmentRequest
+                      {
+                          EmployeeId = employeeId,
+                          StoreId = storeId,
+                          StartsAtUtc = _shiftStartsAt.ToUniversalTime(),
+                          EndsAtUtc = _shiftEndsAt.ToUniversalTime(),
+                          Notes = _shiftNotes
+                      });
+
+                  SetMessage(
+                      success,
+                      success
+                          ? "Shift created successfully."
+                          : "The shift could not be created.");
+              }
+
+              private async Task CreateLeaveRequestAsync()
+              {
+                  if (!Guid.TryParse(
+                      _leaveEmployeeIdText,
+                      out var employeeId))
+                  {
+                      SetMessage(false, "Enter a valid employee ID.");
+                      return;
+                  }
+
+                  var success = await HrApi.CreateLeaveRequestAsync(
+                      new LeaveRequestModel
+                      {
+                          EmployeeId = employeeId,
+                          LeaveType = _leaveType,
+                          StartsOnUtc = _leaveStartsOn.ToUniversalTime(),
+                          EndsOnUtc = _leaveEndsOn.ToUniversalTime(),
+                          Reason = _leaveReason
+                      });
+
+                  SetMessage(
+                      success,
+                      success
+                          ? "Leave request submitted."
+                          : "The leave request could not be submitted.");
+              }
+
+              private void SetMessage(bool success, string message)
+              {
+                  _success = success;
+                  _message = message;
+              }
+          }
+          EOF
+
+      - name: Update HR navigation and styles
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/Outfitters.Web/Components/Layout/MainLayout.razor")
+          text = path.read_text()
+
+          marker = '<NavLink href="/employees">Employees</NavLink>'
+
+          additions = (
+              marker
+              + '\n                      <NavLink href="/hr">'
+              + 'HR Dashboard</NavLink>'
+              + '\n                      <NavLink href="/hr/attendance">'
+              + 'Attendance</NavLink>'
+              + '\n                      <NavLink href="/hr/scheduling">'
+              + 'Shifts and Leave</NavLink>'
+          )
+
+          if 'href="/hr"' not in text:
+              text = text.replace(marker, additions, 1)
+
+          path.write_text(text)
+          PY
+
+          cat >> src/Outfitters.Web/wwwroot/css/site.css <<'EOF'
+
+          .hr-section {
+              margin-bottom: 18px;
+              padding: 0;
+              overflow: hidden;
+          }
+
+          .hr-section .section-heading {
+              padding: 18px;
+          }
+
+          .employee-performance-table {
+              grid-template-columns:
+                  minmax(180px, 1.4fr)
+                  minmax(120px, 1fr)
+                  minmax(120px, 1fr)
+                  110px
+                  100px
+                  110px
+                  110px;
+          }
+
+          .attendance-alert-table {
+              grid-template-columns:
+                  minmax(180px, 1.4fr)
+                  minmax(120px, 1fr)
+                  110px
+                  120px
+                  minmax(180px, 1.5fr);
+          }
+
+          .hr-form {
+              display: grid;
+              gap: 16px;
+          }
+
+          .hr-form h2 {
+              margin: 0 0 4px;
+          }
+
+          .hr-form label {
+              display: grid;
+              gap: 8px;
+              color: #c6c8ce;
+          }
+
+          .hr-form input,
+          .hr-form select,
+          .hr-form textarea {
+              width: 100%;
+              padding: 12px 14px;
+              border: 1px solid #343740;
+              border-radius: 10px;
+              color: #fff;
+              background: #111317;
+          }
+
+          .hr-tools-grid {
+              display: grid;
+              grid-template-columns: repeat(2, minmax(0, 1fr));
+              gap: 18px;
+              margin-bottom: 18px;
+          }
+
+          @media (max-width: 1050px) {
+              .employee-performance-table,
+              .attendance-alert-table,
+              .hr-tools-grid {
+                  grid-template-columns: 1fr;
+              }
+
+              .employee-performance-table.table-header,
+              .attendance-alert-table.table-header {
+                  display: none;
+              }
+          }
+          EOF
+
+      - name: Normalize Razor directives
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("src/Outfitters.Web")
+          pattern = re.compile(
+              r"^\s*@(page|attribute|inject|using|namespace|inherits|layout|"
+              r"implements|typeparam|rendermode)\b"
+          )
+
+          for path in root.rglob("*.razor"):
+              lines = path.read_text(encoding="utf-8-sig").splitlines()
+              normalized = [
+                  line.lstrip() if pattern.match(line) else line
+                  for line in lines
+              ]
+
+              path.write_text(
+                  "\n".join(normalized).rstrip() + "\n",
+                  encoding="utf-8"
+              )
+          PY
+
+      - name: Restore build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          dotnet restore OutfittersRetailManagementSystem.sln
+          dotnet build OutfittersRetailManagementSystem.sln \
+            --configuration Release \
+            --no-restore
+          dotnet test OutfittersRetailManagementSystem.sln \
+            --configuration Release \
+            --no-build
+
+      - name: Commit milestone 20
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add src/Outfitters.Web
+
+          if git diff --cached --quiet
+          then
+            echo "Milestone 20 is already committed."
+            exit 0
+          fi
+
+          git commit -m \
+            "Milestone 20 - Add employee and HR management UI"
+
+          for attempt in 1 2 3
+          do
+            git fetch origin main
+            git rebase origin/main
+
+            if git push origin HEAD:main
+            then
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]
+            then
+              sleep 5
+            fi
+          done
+
+          echo "Unable to push Milestone 20 after three attempts."
+          exit 1
