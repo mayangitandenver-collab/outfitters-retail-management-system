@@ -516,8 +516,6 @@ jobs:
                           x.BarcodeType,
                           x.ProductVariantId,
                           ProductName = x.ProductVariant.Product.Name,
-                          x.ProductVariant.Sku,
-                          x.ProductVariant.RetailPrice,
                           x.IsPrimary
                       })
                       .SingleOrDefaultAsync();
