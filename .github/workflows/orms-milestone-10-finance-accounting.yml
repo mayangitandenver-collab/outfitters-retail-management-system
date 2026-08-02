@@ -740,16 +740,23 @@ jobs:
           dotnet restore OutfittersRetailManagementSystem.sln
           dotnet build OutfittersRetailManagementSystem.sln --configuration Release --no-restore
 
-      - name: Create EF Core migration
+      - name: Create EF Core migration if missing
         shell: bash
         run: |
           set -euo pipefail
           dotnet tool install --global dotnet-ef --version 9.0.*
           export PATH="$PATH:$HOME/.dotnet/tools"
-          dotnet ef migrations add AddFinanceAndAccounting \
-            --project src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj \
-            --startup-project src/Outfitters.API/Outfitters.API.csproj \
-            --output-dir Persistence/Migrations
+
+          if find src/Outfitters.Infrastructure/Persistence/Migrations \
+              -type f -name '*_AddFinanceAndAccounting.cs' | grep -q .
+          then
+            echo "AddFinanceAndAccounting migration already exists; skipping creation."
+          else
+            dotnet ef migrations add AddFinanceAndAccounting \
+              --project src/Outfitters.Infrastructure/Outfitters.Infrastructure.csproj \
+              --startup-project src/Outfitters.API/Outfitters.API.csproj \
+              --output-dir Persistence/Migrations
+          fi
 
       - name: Build and test
         shell: bash
@@ -765,6 +772,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src tests OutfittersRetailManagementSystem.sln Directory.Build.props docker-compose.yml global.json README.md .gitignore
+
+          if git diff --cached --quiet
+          then
+            echo "Milestone 10 files are already committed; nothing to push."
+            exit 0
+          fi
+
           git commit -m "Milestone 10 - Add finance and accounting foundation"
 
           for attempt in 1 2 3
