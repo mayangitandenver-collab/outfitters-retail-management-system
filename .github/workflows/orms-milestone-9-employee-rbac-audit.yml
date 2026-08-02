@@ -157,7 +157,7 @@ jobs:
               public DbSet<EmployeeAttendance> EmployeeAttendanceRecords => Set<EmployeeAttendance>();
               public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
-'''
+          '''
           if 'DbSet<EmployeeProfile>' not in text:
               pos = text.find('protected override void OnModelCreating')
               if pos < 0:
@@ -205,7 +205,7 @@ jobs:
                       entity.HasOne(x => x.User).WithMany()
                           .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.SetNull);
                   });
-'''
+          '''
           if 'builder.Entity<EmployeeProfile>' not in text:
               match = re.search(r'protected\s+override\s+void\s+OnModelCreating\s*\([^)]*\)\s*\{', text)
               if not match:
