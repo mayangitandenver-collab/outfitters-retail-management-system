@@ -1,0 +1,48 @@
+@namespace Outfitters.Web.Components.Shared
+
+<div class="module-toolbar">
+    <div class="toolbar-search">
+        <input
+            value="@SearchText"
+            @oninput="OnInput"
+            placeholder="@Placeholder" />
+    </div>
+
+    <div class="toolbar-actions">
+        @if (!string.IsNullOrWhiteSpace(SecondaryText))
+        {
+            <button
+                type="button"
+                class="ghost-button"
+                @onclick="SecondaryAction">
+                @SecondaryText
+            </button>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(PrimaryText))
+        {
+            <button
+                type="button"
+                class="primary-button compact"
+                @onclick="PrimaryAction">
+                @PrimaryText
+            </button>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public string SearchText { get; set; } = string.Empty;
+    [Parameter] public EventCallback<string> SearchTextChanged { get; set; }
+    [Parameter] public string Placeholder { get; set; } = "Search...";
+    [Parameter] public string? PrimaryText { get; set; }
+    [Parameter] public EventCallback PrimaryAction { get; set; }
+    [Parameter] public string? SecondaryText { get; set; }
+    [Parameter] public EventCallback SecondaryAction { get; set; }
+
+    private async Task OnInput(ChangeEventArgs args)
+    {
+        SearchText = args.Value?.ToString() ?? string.Empty;
+        await SearchTextChanged.InvokeAsync(SearchText);
+    }
+}

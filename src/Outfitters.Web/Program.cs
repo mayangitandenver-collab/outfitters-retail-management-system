@@ -16,6 +16,12 @@ builder.Services.AddHttpClient<IApiClient, ApiClient>(client =>
     client.Timeout = TimeSpan.FromSeconds(30);
 });
 
+builder.Services.AddHttpClient<IRetailApiClient, RetailApiClient>(client =>
+{
+    client.BaseAddress = new Uri(apiBaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+
 var app = builder.Build();
 
 if (!app.Environment.IsDevelopment())

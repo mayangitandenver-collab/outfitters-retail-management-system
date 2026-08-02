@@ -1,0 +1,12 @@
+@namespace Outfitters.Web.Components.Shared
+
+<span class="status-badge @CssClass">@Text</span>
+
+@code {
+    [Parameter] public string Text { get; set; } = string.Empty;
+    [Parameter] public bool Positive { get; set; }
+
+    private string CssClass => Positive
+        ? "status-positive"
+        : "status-warning";
+}
