@@ -1,0 +1,14 @@
+@namespace Outfitters.Web.Components.Shared
+@inject NavigationManager Navigation
+
+<p>Redirecting to sign in...</p>
+
+@code {
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+        {
+            Navigation.NavigateTo("/login", replace: true);
+        }
+    }
+}

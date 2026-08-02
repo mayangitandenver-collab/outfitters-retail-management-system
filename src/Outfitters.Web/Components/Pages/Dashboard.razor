@@ -1,0 +1,42 @@
+@page "/"
+@attribute [Authorize]
+@inject IApiClient ApiClient
+@inject NavigationManager Navigation
+
+<PageTitle>Dashboard - OUTFITTERS</PageTitle>
+
+<div class="page-heading">
+    <div><span class="eyebrow">Overview</span><h1>Store Dashboard</h1><p>Live retail performance and operational alerts.</p></div>
+    <button type="button" class="primary-button compact" @onclick="NavigateToPos">New Sale</button>
+</div>
+
+@if (_loading)
+{
+    <section class="page-card">Loading dashboard...</section>
+}
+else
+{
+    <div class="metric-grid">
+        <article class="metric-card"><span>Today's Sales</span><strong>@_summary.TodaySales.ToString("C")</strong></article>
+        <article class="metric-card"><span>Monthly Sales</span><strong>@_summary.MonthSales.ToString("C")</strong></article>
+        <article class="metric-card"><span>Inventory Value</span><strong>@_summary.InventoryValue.ToString("C")</strong></article>
+        <article class="metric-card alert-card"><span>Low Stock Items</span><strong>@_summary.LowStockCount</strong></article>
+        <article class="metric-card"><span>Active Customers</span><strong>@_summary.ActiveCustomers</strong></article>
+        <article class="metric-card"><span>Transactions Today</span><strong>@_summary.TransactionsToday</strong></article>
+    </div>
+}
+
+@code {
+    private DashboardSummary _summary = new();
+    private bool _loading = true;
+    protected override async Task OnInitializedAsync()
+    {
+        _summary = await ApiClient.GetDashboardAsync();
+        _loading = false;
+    }
+
+    private void NavigateToPos()
+    {
+        Navigation.NavigateTo("/pos");
+    }
+}
