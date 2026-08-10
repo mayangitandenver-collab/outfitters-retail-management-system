@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$PrinterName,
     [ValidateSet(58, 80)]
-    [int]$PaperWidth = 80
+    [int]$PaperWidth = 58
 )
 
 $ErrorActionPreference = "Stop"

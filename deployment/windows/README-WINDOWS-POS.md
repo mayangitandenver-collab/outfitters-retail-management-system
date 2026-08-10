@@ -13,18 +13,19 @@ This bundle is configured for:
 ## Installation order
 
 1. Install PostgreSQL 17 for Windows.
-2. Install the Windows driver supplied for the exact XPrinter model.
+2. Install the Windows driver supplied for the exact receipt printer model.
 3. Connect the cash drawer to the printer's drawer port.
 4. Run PowerShell as Administrator.
 5. Run `Install-ORMs.ps1`.
-6. Configure the database credentials in the API production settings.
-7. Run the API and web applications.
-8. Run `Test-Printer.ps1 -PrinterName "Windows Printer Name" -PaperWidth 80`.
-9. Complete a test sale using sample data before using live transactions.
+6. Run `C:\Outfitters\scripts\Configure-Database.ps1` and enter the PostgreSQL administrator password plus the ORMS database-user password when prompted.
+7. Run `C:\Outfitters\scripts\Test-Printer.ps1 -PrinterName "XP-58 (copy 1)" -PaperWidth 58`.
+8. Run `C:\Outfitters\scripts\Start-ORMS.ps1`.
+9. Open `http://localhost:8081` on the POS computer.
+10. Complete a test sale using sample data before using live transactions.
 
 ## Hardware limitation
 
-ESC/POS support is included, but the exact XPrinter driver, code page,
+ESC/POS support is included, but the exact receipt printer driver, code page,
 cutter behavior, paper width, and cash-drawer pulse must be verified
 with the physical printer and drawer. The printer name must match the
 name shown in Windows Settings > Bluetooth & devices > Printers & scanners.
