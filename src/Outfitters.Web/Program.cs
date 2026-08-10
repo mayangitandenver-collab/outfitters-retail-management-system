@@ -12,7 +12,9 @@ builder.Services
     .AddCookie();
 builder.Services.AddScoped<AuthSession>();
 builder.Services.AddScoped<BearerTokenHandler>();
-builder.Services.AddScoped<AuthenticationStateProvider, OrmsAuthenticationStateProvider>();
+builder.Services.AddScoped<OrmsAuthenticationStateProvider>();
+builder.Services.AddScoped<AuthenticationStateProvider>(sp =>
+    sp.GetRequiredService<OrmsAuthenticationStateProvider>());
 
 var apiBaseUrl = builder.Configuration["Api:BaseUrl"] ?? "http://localhost:8080";
 
