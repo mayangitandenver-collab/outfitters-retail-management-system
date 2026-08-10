@@ -10,7 +10,7 @@ builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 builder.Services
     .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie();
-builder.Services.AddAuthoriztion();
+builder.Services.AddAuthoriztionCore();
 builder.Services.AddScoped<AuthSession>();
 builder.Services.AddScoped<BearerTokenHandler>();
 builder.Services.AddScoped<AuthenticationStateProvider, OrmsAuthenticationStateProvider>();
