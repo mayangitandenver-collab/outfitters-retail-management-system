@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Components.Authorization;
 using Outfitters.Web.Authentication;
 using Outfitters.Web.Components;
@@ -6,7 +7,10 @@ using Outfitters.Web.Services;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
-builder.Services.AddAuthorizationCore();
+builder.Services
+    .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie();
+builder.Services.AddAuthoriztion();
 builder.Services.AddScoped<AuthSession>();
 builder.Services.AddScoped<BearerTokenHandler>();
 builder.Services.AddScoped<AuthenticationStateProvider, OrmsAuthenticationStateProvider>();
@@ -74,6 +78,8 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseStaticFiles();
+app.UseAuthentication();
+app.UseAuthorization();
 app.UseAntiforgery();
 app.MapGet("/health", () => Results.Ok(new { Status = "Healthy", Service = "Outfitters.Web", UtcTime = DateTime.UtcNow }));
 app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
