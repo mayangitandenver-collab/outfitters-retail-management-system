@@ -8,8 +8,12 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 builder.Services
-    .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
-    .AddCookie();
+    .AddAuthentication(CookieAuthenticationDefaults.AuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options =>
+               {
+                   options.LoginPath = "/login";
+                   options.AccessDeniedPath = "/login";
+               });
 builder.Services.AddScoped<AuthSession>();
 builder.Services.AddScoped<BearerTokenHandler>();
 builder.Services.AddScoped<OrmsAuthenticationStateProvider>();
