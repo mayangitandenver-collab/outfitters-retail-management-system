@@ -69,7 +69,13 @@ builder.Services
     .AddHttpMessageHandler<BearerTokenHandler>();
 
 var app = builder.Build();
+var authenticationService =
+    app.Services.GetService<Microsoft.AspNetCore.Authentication.IAuthenticationService>();
 
+Console.WriteLine(
+    authenticationService is null
+        ? "DI CHECK: IAuthenticationService = MISSING"
+        : "DI CHECK: IAuthenticationService = REGISTERED");
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/error", createScopeForErrors: true);
