@@ -14,7 +14,7 @@
         </div>
         <h1>Sign in</h1>
         <p>Enter your employee account to continue.</p>
-        <EditForm Model="_request" OnValidSubmit="SubmitAsync">
+        <EditForm Model="_request" OnValidSubmit="SubmitAsync" FormName="LoginForm">
             <DataAnnotationsValidator />
             <label>Email address<InputText @bind-Value="_request.Email" /></label>
             <label>Password<InputText @bind-Value="_request.Password" type="password" /></label>
