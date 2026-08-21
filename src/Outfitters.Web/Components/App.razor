@@ -1,3 +1,5 @@
+@using Microsoft.AspNetCore.Components.Web
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -5,10 +7,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <base href="/" />
     <link rel="stylesheet" href="css/site.css" />
-    <HeadOutlet />
+    <HeadOutlet @rendermode="@(new InteractiveServerRenderMode())" />
 </head>
 <body>
-    <Routes />
+    <Routes @rendermode="@(new InteractiveServerRenderMode())" />
     <script src="_framework/blazor.web.js"></script>
 </body>
 </html>

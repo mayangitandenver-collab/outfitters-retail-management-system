@@ -76,10 +76,83 @@ public sealed class ReportsController : ControllerBase
         var lowStockCount = await inventory.CountAsync(x =>
             x.QuantityOnHand - x.ReservedQuantity <= x.ReorderPoint);
 
+        var now = DateTime.UtcNow;
+
+        var todayStart = now.Date;
+        var tomorrowStart = todayStart.AddDays(1);
+
+        var monthStart = new DateTime(
+            now.Year,
+            now.Month,
+            1,
+            0,
+            0,
+            0,
+            DateTimeKind.Utc);
+
+        var nextMonthStart = monthStart.AddMonths(1);
+
+        var todaySalesQuery = _db.Sales
+            .AsNoTracking()
+            .Where(x =>
+                x.CreatedAtUtc >= todayStart &&
+                x.CreatedAtUtc < tomorrowStart &&
+                x.Status != SaleStatus.Voided);
+
+        var monthSalesQuery = _db.Sales
+            .AsNoTracking()
+            .Where(x =>
+                x.CreatedAtUtc >= monthStart &&
+                x.CreatedAtUtc < nextMonthStart &&
+                x.Status != SaleStatus.Voided);
+
+        if (storeId.HasValue)
+{
+            todaySalesQuery =
+                todaySalesQuery.Where(x => x.StoreId == storeId.Value);
+
+            monthSalesQuery =
+                monthSalesQuery.Where(x => x.StoreId == storeId.Value);
+}
+
+        var todaySales =
+            await todaySalesQuery.SumAsync(x => (decimal?)x.GrandTotal) ?? 0m;
+
+        var monthSales =
+            await monthSalesQuery.SumAsync(x => (decimal?)x.GrandTotal) ?? 0m;
+
+        var transactionsToday =
+            await todaySalesQuery.CountAsync();
+
+        var activeCustomerCutoff = now.AddDays(-90);
+
+        var activeCustomerSales = _db.Sales
+            .AsNoTracking()
+            .Where(x =>
+                x.CreatedAtUtc >= activeCustomerCutoff &&
+                x.Status != SaleStatus.Voided &&
+                x.CustomerId.HasValue);
+
+        if (storeId.HasValue)
+{
+            activeCustomerSales =
+                activeCustomerSales.Where(x => x.StoreId == storeId.Value);
+}
+
+        var activeCustomers =
+            await activeCustomerSales
+                .Select(x => x.CustomerId)
+                .Distinct()
+                .CountAsync();
+
         var result = new
         {
             StartDate = DateOnly.FromDateTime(start),
             EndDate = DateOnly.FromDateTime(endExclusive.AddDays(-1)),
+	    
+            TodaySales = todaySales,
+            MonthSales = monthSales,
+        
             GrossSales = grossSales,
             Discounts = discounts,
             Taxes = taxes,
@@ -87,14 +160,24 @@ public sealed class ReportsController : ControllerBase
             Transactions = transactions,
             UnitsSold = unitsSold,
             AverageTransactionValue =
-                transactions == 0 ? 0m : decimal.Round(grossSales / transactions, 2),
+                transactions == 0 
+                    ? 0m 
+                    : decimal.Round(grossSales / transactions, 2),
             PurchaseOrderValue =
                 await purchaseOrders.SumAsync(x => (decimal?)x.GrandTotal) ?? 0m,
             InventoryCostValue = inventoryCostValue,
             InventoryRetailValue = inventoryRetailValue,
-            PotentialInventoryMargin = inventoryRetailValue - inventoryCostValue,
-            LowStockItems = lowStockCount
-        };
+            InventoryValue = inventoryRetailValue,
+
+            PotentialInventoryMargin = 
+                inventoryRetailValue - inventoryCostValue,
+            
+            LowStockItems = lowStockCount,
+            LowStockCount = lowStockCount,
+
+            ActiveCustomers = activeCustomers,
+            TransactionsToday = transactionsToday
+    };
 
         return Ok(result);
     }

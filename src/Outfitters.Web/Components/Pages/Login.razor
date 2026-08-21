@@ -1,5 +1,6 @@
 @page "/login"
 @attribute [AllowAnonymous]
+
 @inject IApiClient ApiClient
 @inject OrmsAuthenticationStateProvider AuthState
 @inject NavigationManager Navigation
@@ -16,7 +17,7 @@
         <p>Enter your employee account to continue.</p>
         <EditForm Model="_request" OnValidSubmit="SubmitAsync" FormName="LoginForm">
             <DataAnnotationsValidator />
-            <label>Email address<InputText @bind-Value="_request.Email" /></label>
+            <label>Username<InputText @bind-Value="_request.Username" /></label>
             <label>Password<InputText @bind-Value="_request.Password" type="password" /></label>
             <label class="checkbox-row"><InputCheckbox @bind-Value="_request.RememberMe" />Remember me</label>
             @if (!string.IsNullOrWhiteSpace(_error))
@@ -48,3 +49,4 @@
         Navigation.NavigateTo("/");
     }
 }
+

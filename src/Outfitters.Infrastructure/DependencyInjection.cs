@@ -37,6 +37,7 @@ public static class DependencyInjection
             })
             .AddRoles<ApplicationRole>()
             .AddSignInManager()
+            .AddDefaultTokenProviders()
             .AddEntityFrameworkStores<ApplicationDbContext>();
 
         var jwtSection = configuration.GetSection(JwtOptions.SectionName);

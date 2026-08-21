@@ -32,7 +32,29 @@ public sealed class SalesController : ControllerBase
         {
             return BadRequest("At least one payment is required.");
         }
+        var paymentReferences = request.Payments
+            .Select(x => x.ReferenceNumber?.Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Cast<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
+        if (paymentReferences.Length > 0)
+        {
+            var duplicateReference = await _db.SalePayments
+                .AsNoTracking()
+                .Where(x =>
+                    x.ReferenceNumber != null &&
+                    paymentReferences.Contains(x.ReferenceNumber))
+                .Select(x => x.ReferenceNumber)
+                .FirstOrDefaultAsync();
+           
+            if (duplicateReference is not null)
+            {
+                return Conflict(
+                    $"Payment reference '{duplicateReference}' has already been processed.");
+            }
+}
         var cashSession = await _db.CashSessions.SingleOrDefaultAsync(x =>
             x.Id == request.CashSessionId &&
             x.StoreId == request.StoreId &&

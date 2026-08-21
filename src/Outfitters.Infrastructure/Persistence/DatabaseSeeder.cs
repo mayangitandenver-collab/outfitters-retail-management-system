@@ -59,6 +59,18 @@ public static class DatabaseSeeder
 
         const string adminUsername = "admin";
         var admin = await userManager.FindByNameAsync(adminUsername);
+
+	if (admin is not null)
+{
+    var token = await userManager.GeneratePasswordResetTokenAsync(admin);
+    var resetResult = await userManager.ResetPasswordAsync(admin, token, "Admin@123");
+
+    if (!resetResult.Succeeded)
+    {
+        throw new InvalidOperationException(
+            string.Join("; ", resetResult.Errors.Select(x => x.Description)));
+    }
+}
         if (admin is null)
         {
             admin = new ApplicationUser
