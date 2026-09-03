@@ -11,6 +11,7 @@ public sealed class Sale : BaseEntity
     public CashSession CashSession { get; set; } = null!;
     public Guid CashierUserId { get; set; }
     public ApplicationUser CashierUser { get; set; } = null!;
+    public Guid CheckoutId { get; set; }
     public string ReceiptNumber { get; set; } = string.Empty;
     public decimal Subtotal { get; set; }
     public decimal DiscountTotal { get; set; }

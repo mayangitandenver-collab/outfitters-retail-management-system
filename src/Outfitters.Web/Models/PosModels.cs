@@ -1,4 +1,4 @@
-namespace Outfitters.Web.Models;
+﻿namespace Outfitters.Web.Models;
 
 public sealed class PosProduct
 {
@@ -24,14 +24,16 @@ public sealed class PosCartItem
 
 public sealed class CheckoutPayment
 {
-    public string Method { get; set; } = "Cash";
+    public int Method { get; set; }
     public decimal Amount { get; set; }
     public string? ReferenceNumber { get; set; }
 }
 
 public sealed class CreateSaleRequest
 {
+    public Guid CheckoutId { get; set; }
     public Guid StoreId { get; set; }
+    public Guid CashSessionId { get; set; }
     public Guid? CustomerId { get; set; }
     public IReadOnlyCollection<CreateSaleLineRequest> Items { get; set; } =
         Array.Empty<CreateSaleLineRequest>();
@@ -45,6 +47,7 @@ public sealed class CreateSaleLineRequest
     public decimal Quantity { get; set; }
     public decimal UnitPrice { get; set; }
     public decimal DiscountAmount { get; set; }
+    public decimal TaxAmount { get; set; }
 }
 
 public sealed class SaleResult
@@ -52,4 +55,32 @@ public sealed class SaleResult
     public Guid Id { get; set; }
     public string ReceiptNumber { get; set; } = string.Empty;
     public decimal GrandTotal { get; set; }
+}
+
+public sealed class CashSessionListItem
+{
+    public Guid Id { get; set; }
+    public Guid StoreId { get; set; }
+    public DateTime OpenedAtUtc { get; set; }
+    public decimal OpeningCash { get; set; }
+    public int Status { get; set; }
+}
+public sealed class PosProductSearchItem
+{
+    public Guid Id { get; set; }
+    public string Sku { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public IReadOnlyCollection<PosProductSearchVariant> Variants { get; set; }
+        = Array.Empty<PosProductSearchVariant>();
+}
+
+public sealed class PosProductSearchVariant
+{
+    public Guid Id { get; set; }
+    public string VariantSku { get; set; } = string.Empty;
+    public string Barcode { get; set; } = string.Empty;
+    public string? Size { get; set; }
+    public string? Color { get; set; }
+    public decimal SellingPrice { get; set; }
+    public bool IsActive { get; set; }
 }

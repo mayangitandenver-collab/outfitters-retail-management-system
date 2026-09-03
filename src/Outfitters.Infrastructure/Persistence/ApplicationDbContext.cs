@@ -170,6 +170,7 @@ protected override void OnModelCreating(ModelBuilder builder)
         builder.Entity<Sale>(entity =>
         {
             entity.HasIndex(x => x.ReceiptNumber).IsUnique();
+            entity.HasIndex(x => new { x.StoreId, x.CheckoutId }).IsUnique();
             entity.Property(x => x.ReceiptNumber).HasMaxLength(50).IsRequired();
             entity.Property(x => x.Subtotal).HasPrecision(18, 2);
             entity.Property(x => x.DiscountTotal).HasPrecision(18, 2);

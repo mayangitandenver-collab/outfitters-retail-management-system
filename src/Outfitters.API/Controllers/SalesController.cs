@@ -32,6 +32,32 @@ public sealed class SalesController : ControllerBase
         {
             return BadRequest("At least one payment is required.");
         }
+        if (request.CheckoutId == Guid.Empty)
+{
+    return BadRequest("CheckoutId is required.");
+}
+
+var existingSale = await _db.Sales
+    .AsNoTracking()
+    .SingleOrDefaultAsync(x =>
+        x.StoreId == request.StoreId &&
+        x.CheckoutId == request.CheckoutId);
+
+if (existingSale is not null)
+{
+    return Ok(new
+    {
+        existingSale.Id,
+        existingSale.ReceiptNumber,
+        existingSale.Subtotal,
+        existingSale.DiscountTotal,
+        existingSale.TaxTotal,
+        existingSale.GrandTotal,
+        existingSale.AmountPaid,
+        existingSale.ChangeDue,
+        existingSale.CreatedAtUtc
+    });
+}
         var paymentReferences = request.Payments
             .Select(x => x.ReferenceNumber?.Trim())
             .Where(x => !string.IsNullOrWhiteSpace(x))
@@ -73,6 +99,7 @@ public sealed class SalesController : ControllerBase
             StoreId = request.StoreId,
             CashSessionId = request.CashSessionId,
             CashierUserId = cashierUserId,
+            CheckoutId = request.CheckoutId,
             ReceiptNumber = await GenerateReceiptNumber(request.StoreId),
             Notes = request.Notes?.Trim()
         };
@@ -166,8 +193,41 @@ public sealed class SalesController : ControllerBase
         sale.ChangeDue = sale.AmountPaid - sale.GrandTotal;
 
         _db.Sales.Add(sale);
-        await _db.SaveChangesAsync();
-        await transaction.CommitAsync();
+
+try
+{
+    await _db.SaveChangesAsync();
+    await transaction.CommitAsync();
+}
+catch (DbUpdateException)
+{
+    await transaction.RollbackAsync();
+    _db.ChangeTracker.Clear();
+
+    var concurrentSale = await _db.Sales
+        .AsNoTracking()
+        .SingleOrDefaultAsync(x =>
+            x.StoreId == request.StoreId &&
+            x.CheckoutId == request.CheckoutId);
+
+    if (concurrentSale is null)
+    {
+        throw;
+    }
+
+    return Ok(new
+    {
+        concurrentSale.Id,
+        concurrentSale.ReceiptNumber,
+        concurrentSale.Subtotal,
+        concurrentSale.DiscountTotal,
+        concurrentSale.TaxTotal,
+        concurrentSale.GrandTotal,
+        concurrentSale.AmountPaid,
+        concurrentSale.ChangeDue,
+        concurrentSale.CreatedAtUtc
+    });
+}
 
         return Ok(new
         {

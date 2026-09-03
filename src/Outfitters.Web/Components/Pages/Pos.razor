@@ -1,7 +1,9 @@
-@page "/pos"
+﻿@page "/pos"
+@using Outfitters.Web.Services
 @attribute [Authorize]
 @inject IRetailApiClient RetailApi
 @inject IJSRuntime JavaScript
+@inject IPrinterService PrinterService
 
 <PageTitle>Point of Sale - OUTFITTERS</PageTitle>
 
@@ -87,7 +89,7 @@
                         </div>
 
                         <div class="quantity-controls">
-                            <button @onclick="() => Decrease(item)">−</button>
+                            <button @onclick="() => Decrease(item)">âˆ’</button>
                             <span>@item.Quantity.ToString("0.##")</span>
                             <button @onclick="() => Increase(item)">+</button>
                         </div>
@@ -169,7 +171,34 @@
     private bool _processing;
     private bool _checkoutSucceeded;
     private string? _message;
+    private Guid? _checkoutId;
+    private Guid? _storeId;
+    private Guid? _cashSessionId;
 
+    protected override async Task OnInitializedAsync()
+{
+    var stores = await RetailApi.GetStoresAsync();
+    var store = stores.FirstOrDefault();
+
+    if (store is null)
+    {
+        _message = "No store is available.";
+        return;
+    }
+
+    _storeId = store.Id;
+
+    var sessions = await RetailApi.GetOpenCashSessionsAsync(store.Id);
+    var session = sessions.FirstOrDefault();
+
+    if (session is null)
+    {
+        _message = $"No open cash session found for {store.Name}.";
+        return;
+    }
+
+    _cashSessionId = session.Id;
+}
     private decimal Subtotal =>
         _cart.Sum(x => x.UnitPrice * x.Quantity);
 
@@ -198,7 +227,7 @@
         }
 
         _searching = true;
-        _results = await RetailApi.SearchProductsAsync(_search, null);
+        _results = await RetailApi.SearchProductsAsync(_search, _storeId);
         _searching = false;
 
         if (_results.Count == 1)
@@ -277,22 +306,33 @@
             _processing = false;
             return;
         }
+        if (!_storeId.HasValue || !_cashSessionId.HasValue)
+{
+    _message = "A store and open cash session are required before checkout.";
+    _processing = false;
+    return;
+}
+        _checkoutId ??= Guid.NewGuid();
 
         var request = new CreateSaleRequest
         {
-            StoreId = Guid.Empty,
+            CheckoutId = _checkoutId.Value,
+            StoreId = _storeId!.Value,
+            CashSessionId = _cashSessionId!.Value,
             Items = _cart.Select(x => new CreateSaleLineRequest
             {
                 ProductVariantId = x.ProductVariantId,
                 Quantity = x.Quantity,
                 UnitPrice = x.UnitPrice,
-                DiscountAmount = x.DiscountAmount
+                DiscountAmount = x.DiscountAmount,
+                TaxAmount = 0m
+
             }).ToArray(),
             Payments = new[]
             {
                 new CheckoutPayment
                 {
-                    Method = _paymentMethod,
+                    Method = 1,
                     Amount = GrandTotal
                 }
             }
@@ -309,7 +349,34 @@
 
         _checkoutSucceeded = true;
         _message = $"Sale completed. Receipt: {result.ReceiptNumber}";
+
+var printerProfile = PrinterService.LoadProfile();
+
+if (!string.IsNullOrWhiteSpace(printerProfile.PrinterName))
+{
+    try
+    {
+        var receiptText = await RetailApi.GetReceiptAsync(result.Id);
+
+        if (string.IsNullOrWhiteSpace(receiptText))
+        {
+            _message += " Printing warning: Receipt could not be retrieved.";
+        }
+        else if (!PrinterService.PrintReceipt(
+            printerProfile,
+            receiptText,
+            out var printMessage))
+        {
+            _message += $" Printing warning: {printMessage}";
+        }
+    }
+    catch (Exception ex)
+    {
+        _message += $" Printing warning: {ex.Message}";
+    }
+}
         _cart.Clear();
+        _checkoutId = null;
         _amountReceived = 0m;
         _processing = false;
 

@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using Outfitters.Web.Models;
-
+using System.Net.Http.Headers;
+using Outfitters.Web.Authentication;
 namespace Outfitters.Web.Services;
 
 public interface IApiClient
@@ -16,12 +17,20 @@ public interface IApiClient
 public sealed class ApiClient : IApiClient
 {
     private readonly HttpClient _httpClient;
+private readonly AuthSession _session;
 
-    public ApiClient(HttpClient httpClient)
-    {
-        _httpClient = httpClient;
-    }
-
+public ApiClient(HttpClient httpClient, AuthSession session)
+{
+    _httpClient = httpClient;
+    _session = session;
+}
+    private void ApplyAuthorization()
+{
+    _httpClient.DefaultRequestHeaders.Authorization =
+        string.IsNullOrWhiteSpace(_session.AccessToken)
+            ? null
+            : new AuthenticationHeaderValue("Bearer", _session.AccessToken);
+}
     public async Task<LoginResult?> LoginAsync(
         LoginRequest request,
         CancellationToken cancellationToken = default)
@@ -43,6 +52,8 @@ public sealed class ApiClient : IApiClient
     public async Task<DashboardSummary> GetDashboardAsync(
         CancellationToken cancellationToken = default)
     {
+        ApplyAuthorization();
+
         try
         {
             var result = await _httpClient.GetFromJsonAsync<DashboardSummary>(

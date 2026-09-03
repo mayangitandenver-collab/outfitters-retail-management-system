@@ -22,6 +22,7 @@ public sealed record CheckoutPaymentRequest(
     string? ReferenceNumber);
 
 public sealed record CheckoutRequest(
+    Guid CheckoutId,
     Guid StoreId,
     Guid CashSessionId,
     IReadOnlyCollection<CheckoutItemRequest> Items,

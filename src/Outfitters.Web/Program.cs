@@ -20,7 +20,9 @@ builder.Services.AddScoped<OrmsAuthenticationStateProvider>();
 builder.Services.AddScoped<AuthenticationStateProvider>(sp =>
     sp.GetRequiredService<OrmsAuthenticationStateProvider>());
 
-var apiBaseUrl = builder.Configuration["Api:BaseUrl"] ?? "http://localhost:8080";
+builder.Services.AddSingleton<IPrinterService, PrinterService>();
+
+var apiBaseUrl = builder.Configuration["Api:BaseUrl"] ?? "http://localhost:5028";
 
 builder.Services.AddHttpClient<IApiClient, ApiClient>(client =>
 {
@@ -75,13 +77,7 @@ builder.Services
     .AddHttpMessageHandler<BearerTokenHandler>();
 
 var app = builder.Build();
-var authenticationService =
-    app.Services.GetService<Microsoft.AspNetCore.Authentication.IAuthenticationService>();
 
-Console.WriteLine(
-    authenticationService is null
-        ? "DI CHECK: IAuthenticationService = MISSING"
-        : "DI CHECK: IAuthenticationService = REGISTERED");
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/error", createScopeForErrors: true);

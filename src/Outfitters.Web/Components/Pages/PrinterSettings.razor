@@ -1,0 +1,118 @@
+@page "/printer-settings"
+@using Outfitters.Web.Models
+@using Outfitters.Web.Services
+@inject IPrinterService PrinterService
+
+<PageTitle>Printer Settings - OUTFITTERS</PageTitle>
+
+<h1>Printer Settings</h1>
+
+<p>Select a Windows-installed receipt printer for this workstation.</p>
+
+@if (_printers.Count == 0)
+{
+    <p>No installed printers were detected.</p>
+}
+else
+{
+    <div>
+        <label>Receipt printer</label>
+        <select @bind="_profile.PrinterName">
+            <option value="">Select printer...</option>
+
+            @foreach (var printer in _printers)
+            {
+                <option value="@printer.Name">@printer.Name</option>
+            }
+        </select>
+    </div>
+
+    <div>
+        <label>Paper width</label>
+        <select @bind="_profile.PaperWidthMm">
+            <option value="58">58 mm</option>
+            <option value="80">80 mm</option>
+        </select>
+    </div>
+
+    <div>
+        <label>
+            <input type="checkbox" @bind="_profile.UseEscPos" />
+            ESC/POS mode
+        </label>
+    </div>
+
+    <div>
+        <label>
+            <input type="checkbox" @bind="_profile.AutoCut" />
+            Auto cut receipt
+        </label>
+    </div>
+
+    <div>
+        <label>
+            <input type="checkbox" @bind="_profile.OpenCashDrawer" />
+            Open cash drawer after sale
+        </label>
+    </div>
+
+    <div style="margin-top: 20px;">
+        <button type="button" @onclick="SaveSettings">
+            Save Printer Settings
+        </button>
+
+        <button type="button"
+                @onclick="TestPrint"
+                disabled="@string.IsNullOrWhiteSpace(_profile.PrinterName)">
+            Test Print
+        </button>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <p style="margin-top: 15px;">@_message</p>
+    }
+}
+
+@code {
+    private IReadOnlyCollection<InstalledPrinter> _printers =
+        Array.Empty<InstalledPrinter>();
+
+    private PrinterProfile _profile = new();
+
+    private string? _message;
+
+    protected override void OnInitialized()
+    {
+        _printers = PrinterService.GetInstalledPrinters();
+
+        _profile = PrinterService.LoadProfile();
+
+        if (string.IsNullOrWhiteSpace(_profile.PrinterName))
+        {
+            var defaultPrinter = _printers.FirstOrDefault(x => x.IsDefault);
+
+            if (defaultPrinter is not null)
+            {
+                _profile.PrinterName = defaultPrinter.Name;
+            }
+        }
+    }
+
+    private void SaveSettings()
+    {
+        PrinterService.SaveProfile(_profile);
+        _message = "Printer settings saved.";
+    }
+
+    private void TestPrint()
+    {
+        PrinterService.SaveProfile(_profile);
+
+        PrinterService.TestPrint(
+            _profile,
+            out var message);
+
+        _message = message;
+    }
+}

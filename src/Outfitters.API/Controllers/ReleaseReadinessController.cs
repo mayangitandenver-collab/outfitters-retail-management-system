@@ -28,7 +28,7 @@ public sealed class ReleaseReadinessController : ControllerBase
         {
             Status = "Healthy",
             Service = "Outfitters Retail Management System",
-            Environment = _environment.EnvironmentName,
+            Environment = "Available",
             UtcTime = DateTime.UtcNow
         });
     }
@@ -61,7 +61,7 @@ public sealed class ReleaseReadinessController : ControllerBase
                 UtcTime = DateTime.UtcNow
             });
         }
-        catch (Exception exception)
+        catch (Exception)
         {
             return StatusCode(
                 StatusCodes.Status503ServiceUnavailable,
@@ -69,7 +69,7 @@ public sealed class ReleaseReadinessController : ControllerBase
                 {
                     Status = "Unhealthy",
                     Database = "Error",
-                    Error = exception.Message,
+                    Error = "Service unavailable",
                     UtcTime = DateTime.UtcNow
                 });
         }
