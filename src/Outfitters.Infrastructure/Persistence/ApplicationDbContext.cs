@@ -180,6 +180,7 @@ protected override void OnModelCreating(ModelBuilder builder)
             entity.Property(x => x.GrandTotal).HasPrecision(18, 2);
             entity.Property(x => x.AmountPaid).HasPrecision(18, 2);
             entity.Property(x => x.ChangeDue).HasPrecision(18, 2);
+            entity.Property(x => x.Status).IsConcurrencyToken();
             entity.HasOne(x => x.Store).WithMany()
                 .HasForeignKey(x => x.StoreId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(x => x.CashSession).WithMany(x => x.Sales)
@@ -195,7 +196,9 @@ protected override void OnModelCreating(ModelBuilder builder)
             entity.Property(x => x.DiscountAmount).HasPrecision(18, 2);
             entity.Property(x => x.TaxAmount).HasPrecision(18, 2);
             entity.Property(x => x.LineTotal).HasPrecision(18, 2);
-            entity.Property(x => x.ReturnedQuantity).HasPrecision(18, 3);
+            entity.Property(x => x.ReturnedQuantity)
+    .HasPrecision(18, 3)
+    .IsConcurrencyToken();
             entity.HasOne(x => x.Sale).WithMany(x => x.Items)
                 .HasForeignKey(x => x.SaleId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(x => x.ProductVariant).WithMany()

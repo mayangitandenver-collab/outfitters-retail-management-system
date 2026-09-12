@@ -123,17 +123,30 @@ public sealed class ReturnsController : ControllerBase
         sale.UpdatedAtUtc = DateTime.UtcNow;
 
         _db.SaleReturns.Add(saleReturn);
-        await _db.SaveChangesAsync();
-        await transaction.CommitAsync();
 
-        return Ok(new
-        {
-            saleReturn.Id,
-            saleReturn.ReturnNumber,
-            saleReturn.RefundAmount,
-            SaleStatus = sale.Status,
-            saleReturn.CreatedAtUtc
-        });
+try
+{
+    await _db.SaveChangesAsync();
+    await transaction.CommitAsync();
+}
+catch (DbUpdateConcurrencyException)
+{
+    await transaction.RollbackAsync();
+
+    return Conflict(new
+    {
+        message = "This return could not be completed because the sale or inventory was changed by another operation. Please refresh and try again."
+    });
+}
+
+return Ok(new
+{
+    saleReturn.Id,
+    saleReturn.ReturnNumber,
+    saleReturn.RefundAmount,
+    SaleStatus = sale.Status,
+    saleReturn.CreatedAtUtc
+});
     }
 
     private Guid GetUserId()
