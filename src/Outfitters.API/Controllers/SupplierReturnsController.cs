@@ -1,3 +1,4 @@
+using Npgsql;
 using System.Globalization;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
@@ -92,16 +93,40 @@ public sealed class SupplierReturnsController : ControllerBase
         }
 
         _db.SupplierReturns.Add(supplierReturn);
-        await _db.SaveChangesAsync();
-        await transaction.CommitAsync();
 
-        return Ok(new
-        {
-            supplierReturn.Id,
-            supplierReturn.ReturnNumber,
-            supplierReturn.TotalCost,
-            supplierReturn.Status
-        });
+try
+{
+    await _db.SaveChangesAsync();
+    await transaction.CommitAsync();
+}
+catch (DbUpdateConcurrencyException)
+{
+    await transaction.RollbackAsync();
+
+    return Conflict(new
+    {
+        message = "Inventory was changed by another operation. Please refresh and try the supplier return again."
+    });
+}
+catch (DbUpdateException ex) when (
+    ex.InnerException is PostgresException postgresException &&
+    postgresException.SqlState == PostgresErrorCodes.UniqueViolation)
+{
+    await transaction.RollbackAsync();
+
+    return Conflict(new
+    {
+        message = "Another supplier return was created at the same time. Please refresh and try again."
+    });
+}
+
+return Ok(new
+{
+    supplierReturn.Id,
+    supplierReturn.ReturnNumber,
+    supplierReturn.TotalCost,
+    supplierReturn.Status
+});
     }
 
     private Guid GetUserId()

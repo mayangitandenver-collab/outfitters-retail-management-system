@@ -129,7 +129,9 @@ protected override void OnModelCreating(ModelBuilder builder)
         builder.Entity<InventoryItem>(entity =>
         {
             entity.HasIndex(x => new { x.StoreId, x.ProductVariantId }).IsUnique();
-            entity.Property(x => x.QuantityOnHand).HasPrecision(18, 3);
+            entity.Property(x => x.QuantityOnHand)
+    .HasPrecision(18, 3)
+    .IsConcurrencyToken();
             entity.Property(x => x.ReservedQuantity).HasPrecision(18, 3);
             entity.Property(x => x.ReorderPoint).HasPrecision(18, 3);
             entity.Property(x => x.MinimumStock).HasPrecision(18, 3);
