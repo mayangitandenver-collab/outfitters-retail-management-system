@@ -248,6 +248,7 @@ protected override void OnModelCreating(ModelBuilder builder)
             entity.Property(x => x.DiscountTotal).HasPrecision(18, 2);
             entity.Property(x => x.TaxTotal).HasPrecision(18, 2);
             entity.Property(x => x.GrandTotal).HasPrecision(18, 2);
+            entity.Property(x => x.Status).IsConcurrencyToken();
             entity.HasOne(x => x.Supplier).WithMany(x => x.PurchaseOrders)
                 .HasForeignKey(x => x.SupplierId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(x => x.Store).WithMany()
