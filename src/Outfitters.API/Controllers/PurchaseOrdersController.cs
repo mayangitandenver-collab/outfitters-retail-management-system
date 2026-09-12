@@ -234,8 +234,30 @@ public sealed class PurchaseOrdersController : ControllerBase
         po.UpdatedAtUtc = DateTime.UtcNow;
 
         _db.GoodsReceipts.Add(receipt);
-        await _db.SaveChangesAsync();
-        await transaction.CommitAsync();
+
+try
+{
+    await _db.SaveChangesAsync();
+    await transaction.CommitAsync();
+}
+catch (DbUpdateConcurrencyException)
+{
+    await transaction.RollbackAsync();
+
+    return Conflict(new
+    {
+        message = "This purchase order was updated by another receiving operation. Refresh and try again."
+    });
+}
+catch (DbUpdateException)
+{
+    await transaction.RollbackAsync();
+
+    return Conflict(new
+    {
+        message = "This purchase order was already processed by another receiving operation. Refresh and try again."
+    });
+}
 
         return Ok(new
         {

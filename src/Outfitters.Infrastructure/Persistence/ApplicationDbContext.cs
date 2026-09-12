@@ -258,7 +258,9 @@ protected override void OnModelCreating(ModelBuilder builder)
         {
             entity.HasIndex(x => new { x.PurchaseOrderId, x.ProductVariantId }).IsUnique();
             entity.Property(x => x.OrderedQuantity).HasPrecision(18, 3);
-            entity.Property(x => x.ReceivedQuantity).HasPrecision(18, 3);
+            entity.Property(x => x.ReceivedQuantity)
+    .HasPrecision(18, 3)
+    .IsConcurrencyToken();
             entity.Property(x => x.UnitCost).HasPrecision(18, 2);
             entity.Property(x => x.DiscountAmount).HasPrecision(18, 2);
             entity.Property(x => x.TaxAmount).HasPrecision(18, 2);
