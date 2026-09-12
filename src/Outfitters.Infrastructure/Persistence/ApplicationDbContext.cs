@@ -325,6 +325,7 @@ protected override void OnModelCreating(ModelBuilder builder)
         {
             entity.HasIndex(x => x.TransferNumber).IsUnique();
             entity.Property(x => x.TransferNumber).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.Status).IsConcurrencyToken();
             entity.HasOne(x => x.SourceStore).WithMany()
                 .HasForeignKey(x => x.SourceStoreId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(x => x.DestinationStore).WithMany()
@@ -342,8 +343,13 @@ protected override void OnModelCreating(ModelBuilder builder)
             entity.HasIndex(x => new { x.StockTransferId, x.ProductVariantId }).IsUnique();
             entity.Property(x => x.RequestedQuantity).HasPrecision(18, 3);
             entity.Property(x => x.DispatchedQuantity).HasPrecision(18, 3);
-            entity.Property(x => x.ReceivedQuantity).HasPrecision(18, 3);
-            entity.Property(x => x.DamagedQuantity).HasPrecision(18, 3);
+            entity.Property(x => x.ReceivedQuantity)
+    .HasPrecision(18, 3)
+    .IsConcurrencyToken();
+
+entity.Property(x => x.DamagedQuantity)
+    .HasPrecision(18, 3)
+    .IsConcurrencyToken();
             entity.HasOne(x => x.StockTransfer).WithMany(x => x.Items)
                 .HasForeignKey(x => x.StockTransferId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(x => x.ProductVariant).WithMany()

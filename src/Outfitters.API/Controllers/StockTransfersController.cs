@@ -392,17 +392,30 @@ public sealed class StockTransfersController : ControllerBase
         transfer.UpdatedAtUtc = DateTime.UtcNow;
 
         _db.StockTransferReceipts.Add(receipt);
-        await _db.SaveChangesAsync();
-        await dbTransaction.CommitAsync();
 
-        return Ok(new
-        {
-            receipt.Id,
-            receipt.ReceiptNumber,
-            transfer.TransferNumber,
-            transfer.Status,
-            receipt.ReceivedAtUtc
-        });
+try
+{
+    await _db.SaveChangesAsync();
+    await dbTransaction.CommitAsync();
+}
+catch (DbUpdateConcurrencyException)
+{
+    await dbTransaction.RollbackAsync();
+
+    return Conflict(new
+    {
+        message = "This stock transfer was changed by another operation. Please refresh and try again."
+    });
+}
+
+return Ok(new
+{
+    receipt.Id,
+    receipt.ReceiptNumber,
+    transfer.TransferNumber,
+    transfer.Status,
+    receipt.ReceivedAtUtc
+});
     }
 
     [HttpGet("{id:guid}/audit")]
