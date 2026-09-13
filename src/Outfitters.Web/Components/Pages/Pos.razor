@@ -296,6 +296,10 @@
 
     private async Task CheckoutAsync()
     {
+        if (_processing)
+        {
+           return;
+        }
         _processing = true;
         _message = null;
         _checkoutSucceeded = false;
