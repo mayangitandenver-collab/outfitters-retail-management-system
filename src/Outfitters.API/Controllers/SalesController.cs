@@ -199,6 +199,15 @@ try
     await _db.SaveChangesAsync();
     await transaction.CommitAsync();
 }
+catch (DbUpdateConcurrencyException)
+{
+    await transaction.RollbackAsync();
+
+    return Conflict(new
+    {
+        message = "Inventory was changed by another checkout. Please refresh and try again."
+    });
+}
 catch (DbUpdateException)
 {
     await transaction.RollbackAsync();
