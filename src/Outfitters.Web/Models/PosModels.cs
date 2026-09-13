@@ -35,6 +35,7 @@ public sealed class CreateSaleRequest
     public Guid StoreId { get; set; }
     public Guid CashSessionId { get; set; }
     public Guid? CustomerId { get; set; }
+    public string? Notes { get; set; }
     public IReadOnlyCollection<CreateSaleLineRequest> Items { get; set; } =
         Array.Empty<CreateSaleLineRequest>();
     public IReadOnlyCollection<CheckoutPayment> Payments { get; set; } =
